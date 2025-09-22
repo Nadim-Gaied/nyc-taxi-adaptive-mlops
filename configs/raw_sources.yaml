@@ -1,0 +1,29 @@
+snapshot_date: "2026-09-21"
+provider: "New York City Taxi and Limousine Commission"
+sources:
+  - path: data/raw/tlc/yellow/2019/yellow_tripdata_2019-01.parquet
+    url: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2019-01.parquet
+    bytes: 110439634
+    sha256: 3AD95F39714BFC9864219E69E577F119925C6BA32D384AC68D40BDAD1DC7726D
+  - path: data/raw/tlc/metadata/taxi_zone_lookup.csv
+    url: https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv
+    bytes: 12331
+    sha256: 1A99E105092230F8620F301EDCCA7F80D3080642FF404D28ED957D3FA222C8ED
+  - archive_url: https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip
+    extracted_files:
+      - path: data/raw/tlc/metadata/taxi_zones/taxi_zones.cpg
+        bytes: 5
+        sha256: 3AD3031F5503A4404AF825262EE8232CC04D4EA6683D42C5DD0A2F2A27AC9824
+      - path: data/raw/tlc/metadata/taxi_zones/taxi_zones.dbf
+        bytes: 59927
+        sha256: D57560E494D92CE01CBF4A7F36AB977CECDEE11769B9AD2C4499B929DEF8BB08
+      - path: data/raw/tlc/metadata/taxi_zones/taxi_zones.prj
+        bytes: 565
+        sha256: D1C8390206CE5D557A5908A3A0CE7DD915FBCD12CF73A779B78280BF61CB330C
+      - path: data/raw/tlc/metadata/taxi_zones/taxi_zones.shp
+        bytes: 1586264
+        sha256: 70A5EC90BF0B6A4609B0846638E5331FEE861830633CF29C4F6ED846D5D4C2EA
+      - path: data/raw/tlc/metadata/taxi_zones/taxi_zones.shx
+        bytes: 2204
+        sha256: 830C7309D34C9A617757A3C821F9FC3868C9442A239EA855CD4E49F3B566597C
+

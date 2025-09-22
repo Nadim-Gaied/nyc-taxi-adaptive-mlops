@@ -1,0 +1,10 @@
+forecast_horizon_hours: 1
+seasonal_lag_hours: 168
+training_windows_days: [30, 60, 90, 180, 365]
+include_expanding_window: true
+primary_metric: mae
+secondary_metrics:
+  - wape
+  - macro_zone_mae
+
+split_manifest: configs/splits.yaml

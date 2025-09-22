@@ -1,0 +1,8 @@
+dataset_version: "zone-hour-v1"
+timezone: "America/New_York"
+pickup_timestamp_column: "tpep_pickup_datetime"
+pickup_zone_column: "PULocationID"
+zone_lookup_id_column: "LocationID"
+require_complete_source_hours: true
+exclude_zone_ids: [264, 265]
+
