@@ -26,6 +26,9 @@ class QualityReport:
     source_min_timestamp_utc: str | None
     source_max_timestamp_utc: str | None
     expected_hours: int
+    physical_elapsed_hours: int
+    ambiguous_wall_clock_hours: int
+    nonexistent_wall_clock_hours: int
     observed_source_hours: int
     missing_source_hours: tuple[str, ...]
     ambiguous_dst_policy: str
@@ -68,6 +71,46 @@ def _parse_local_pickup_times(values: pd.Series, timezone: str) -> pd.Series:
         nonexistent="shift_forward",
     )
     return localized.dt.tz_convert("UTC")
+
+
+def _canonical_expected_hours(
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+    timezone: str,
+) -> tuple[pd.DatetimeIndex, int, int, int]:
+    """Create only source-identifiable local wall-clock hours.
+
+    TLC timestamps do not carry a UTC offset or PEP 495 fold marker. The two
+    autumn 01:00 hours therefore cannot be separated. Version 1 maps the single
+    representable 01:00 label to standard time and omits the indistinguishable
+    daylight-time occurrence. A nonexistent spring hour is also omitted.
+    """
+
+    local_start = start_utc.tz_convert(timezone).tz_localize(None)
+    local_end = end_utc.tz_convert(timezone).tz_localize(None)
+    wall_clock_hours = pd.date_range(
+        start=local_start,
+        end=local_end,
+        freq="h",
+        inclusive="left",
+    )
+    ambiguous_probe = wall_clock_hours.tz_localize(
+        timezone,
+        ambiguous="NaT",
+        nonexistent="shift_forward",
+    )
+    nonexistent_probe = wall_clock_hours.tz_localize(
+        timezone,
+        ambiguous=False,
+        nonexistent="NaT",
+    )
+    ambiguous_hours = int(ambiguous_probe.isna().sum())
+    nonexistent_hours = int(nonexistent_probe.isna().sum())
+    canonical = nonexistent_probe.dropna().tz_convert("UTC")
+    physical_hours = len(
+        pd.date_range(start=start_utc, end=end_utc, freq="h", inclusive="left")
+    )
+    return canonical, physical_hours, ambiguous_hours, nonexistent_hours
 
 
 def build_zone_hour_dataset(
@@ -123,7 +166,12 @@ def build_zone_hour_dataset(
     interval["pickup_hour"] = interval["pickup_timestamp_utc"].dt.floor("h")
     interval["pickup_zone_id"] = pd.to_numeric(interval[zone_column], errors="coerce")
 
-    expected_hours = pd.date_range(start=start_utc, end=end_utc, freq="h", inclusive="left")
+    (
+        expected_hours,
+        physical_elapsed_hours,
+        ambiguous_wall_clock_hours,
+        nonexistent_wall_clock_hours,
+    ) = _canonical_expected_hours(start_utc, end_utc, timezone)
     observed_hours = pd.DatetimeIndex(interval["pickup_hour"].dropna().unique()).sort_values()
     missing_hours = expected_hours.difference(observed_hours)
     if require_complete_source_hours and not missing_hours.empty:
@@ -188,6 +236,9 @@ def build_zone_hour_dataset(
             str(valid_timestamps.max()) if not valid_timestamps.empty else None
         ),
         expected_hours=len(expected_hours),
+        physical_elapsed_hours=physical_elapsed_hours,
+        ambiguous_wall_clock_hours=ambiguous_wall_clock_hours,
+        nonexistent_wall_clock_hours=nonexistent_wall_clock_hours,
         observed_source_hours=len(observed_hours),
         missing_source_hours=tuple(str(item) for item in missing_hours),
         ambiguous_dst_policy="assign_standard_time; shift_nonexistent_forward",

@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 YELLOW_FILE_PATTERN = re.compile(r"^yellow_tripdata_(\d{4})-(\d{2})\.parquet$")
 
 
-def _month_sequence(start_month: str, end_month: str) -> list[str]:
+def month_sequence(start_month: str, end_month: str) -> list[str]:
     try:
         start_year, start_number = (int(part) for part in start_month.split("-"))
         end_year, end_number = (int(part) for part in end_month.split("-"))
@@ -56,7 +56,7 @@ def inventory_yellow_files(
     """Describe present files and gaps across an expected inclusive month range."""
 
     root = Path(root)
-    expected_months = _month_sequence(start_month, end_month)
+    expected_months = month_sequence(start_month, end_month)
     discovered: dict[str, list[Path]] = {}
     ignored_parquet_files: list[str] = []
     if root.exists():

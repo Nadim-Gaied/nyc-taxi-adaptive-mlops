@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from taxi_mlops.baselines import daily_weekly_blend_predictions, weekly_seasonal_predictions
-from taxi_mlops.evaluation import regression_metrics
+from taxi_mlops.evaluation import regression_metrics, zone_regression_metrics
 
 
 def test_weekly_baseline_uses_exact_prior_week_for_same_zone() -> None:
@@ -73,3 +73,44 @@ def test_daily_weekly_blend_uses_only_historical_values() -> None:
 
     assert final["prediction"] == pytest.approx(0.25 * 144 + 0.75 * 0)
     assert final["feature_cutoff"] < final["pickup_hour"]
+
+
+def test_zone_metrics_preserve_zone_level_error_and_bias() -> None:
+    predictions = pd.DataFrame(
+        {
+            "pickup_zone_id": [1, 1, 2],
+            "pickup_count": [10, 20, 0],
+            "prediction": [12, 18, 4],
+        }
+    )
+
+    zones = zone_regression_metrics(predictions).set_index("pickup_zone_id")
+
+    assert zones.loc[1, "mae"] == pytest.approx(2.0)
+    assert zones.loc[1, "mean_bias"] == pytest.approx(0.0)
+    assert zones.loc[1, "wape"] == pytest.approx(4 / 30)
+    assert zones.loc[2, "mae"] == pytest.approx(4.0)
+    assert pd.isna(zones.loc[2, "wape"])
+
+
+def test_daily_baseline_matches_local_wall_clock_across_spring_dst() -> None:
+    data = pd.DataFrame(
+        {
+            "pickup_hour": pd.to_datetime(
+                [
+                    "2019-03-09T07:00:00Z",  # 02:00 EST
+                    "2019-03-09T08:00:00Z",  # 03:00 EST
+                    "2019-03-10T07:00:00Z",  # 03:00 EDT
+                ]
+            ),
+            "pickup_zone_id": [1, 1, 1],
+            "pickup_count": [20, 30, 99],
+        }
+    )
+
+    predictions = weekly_seasonal_predictions(data, lag_hours=24)
+    target = predictions.loc[
+        predictions["pickup_hour"] == pd.Timestamp("2019-03-10T07:00:00Z")
+    ].iloc[0]
+
+    assert target["prediction"] == 30

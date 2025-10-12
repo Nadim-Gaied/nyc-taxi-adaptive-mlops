@@ -69,3 +69,56 @@ def test_requires_offset_aware_boundaries() -> None:
             source_file="fixture.parquet",
         )
 
+
+def test_spring_dst_omits_nonexistent_wall_clock_hour() -> None:
+    trips = pd.DataFrame(
+        {
+            "tpep_pickup_datetime": [
+                "2019-03-10 00:10:00",
+                "2019-03-10 01:10:00",
+                "2019-03-10 03:10:00",
+            ],
+            "PULocationID": [1, 1, 1],
+        }
+    )
+    zones = pd.DataFrame({"LocationID": [1]})
+
+    result = build_zone_hour_dataset(
+        trips,
+        zones,
+        start="2019-03-10T00:00:00-05:00",
+        end="2019-03-10T04:00:00-04:00",
+        source_file="spring.parquet",
+    )
+
+    assert result.report.physical_elapsed_hours == 3
+    assert result.report.expected_hours == 3
+    assert result.report.nonexistent_wall_clock_hours == 1
+    assert result.report.ambiguous_wall_clock_hours == 0
+
+
+def test_fall_dst_omits_unidentifiable_duplicate_hour() -> None:
+    trips = pd.DataFrame(
+        {
+            "tpep_pickup_datetime": [
+                "2019-11-03 00:10:00",
+                "2019-11-03 01:10:00",
+                "2019-11-03 02:10:00",
+            ],
+            "PULocationID": [1, 1, 1],
+        }
+    )
+    zones = pd.DataFrame({"LocationID": [1]})
+
+    result = build_zone_hour_dataset(
+        trips,
+        zones,
+        start="2019-11-03T00:00:00-04:00",
+        end="2019-11-03T03:00:00-05:00",
+        source_file="fall.parquet",
+    )
+
+    assert result.report.physical_elapsed_hours == 4
+    assert result.report.expected_hours == 3
+    assert result.report.ambiguous_wall_clock_hours == 1
+    assert result.report.nonexistent_wall_clock_hours == 0
