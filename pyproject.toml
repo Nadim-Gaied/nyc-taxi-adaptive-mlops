@@ -9,10 +9,12 @@ description = "Historical-production replay for adaptive NYC taxi demand forecas
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "lightgbm>=4.6,<5",
   "matplotlib>=3.9,<4",
   "pandas>=2.2,<3.0",
   "pyarrow>=15",
   "PyYAML>=6,<7",
+  "scikit-learn>=1.5,<2",
 ]
 
 [project.optional-dependencies]

@@ -8,12 +8,27 @@ from pathlib import Path
 
 import pandas as pd
 
-from taxi_mlops.analysis import characterize_dataset
+from taxi_mlops.analysis import (
+    analyze_monthly_regimes,
+    characterize_dataset,
+    write_regime_figures,
+)
 from taxi_mlops.baselines import daily_weekly_blend_predictions, weekly_seasonal_predictions
 from taxi_mlops.datasets import load_named_split
-from taxi_mlops.evaluation import regression_metrics, rolling_baseline_backtest
-from taxi_mlops.ingestion import inventory_yellow_files, process_month_range
+from taxi_mlops.evaluation import (
+    regression_metrics,
+    rolling_baseline_backtest,
+    write_baseline_backtest_figures,
+    write_window_experiment_figures,
+)
+from taxi_mlops.features import build_feature_table
+from taxi_mlops.ingestion import (
+    inventory_yellow_files,
+    process_month_range,
+    summarize_quality_reports,
+)
 from taxi_mlops.ingestion.yellow_taxi import build_zone_hour_dataset, read_trip_file
+from taxi_mlops.models import run_training_window_experiment
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
@@ -153,6 +168,20 @@ def _characterize_split(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2))
 
 
+def _summarize_quality(args: argparse.Namespace) -> None:
+    table, summary = summarize_quality_reports(
+        args.report_root,
+        start_month=args.start_month,
+        end_month=args.end_month,
+        require_complete=not args.allow_missing,
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output_dir / "monthly_quality.csv", index=False)
+    _write_json(output_dir / "summary.json", summary)
+    print(json.dumps(summary, indent=2))
+
+
 def _backtest_baselines_split(args: argparse.Namespace) -> None:
     purpose = "development" if args.split == "development" else "validation"
     data = load_named_split(
@@ -170,7 +199,72 @@ def _backtest_baselines_split(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     weekly.to_csv(output_dir / "weekly_metrics.csv", index=False)
     _write_json(output_dir / "summary.json", summary)
+    write_baseline_backtest_figures(weekly, output_dir / "figures")
     print(json.dumps(summary, indent=2))
+
+
+def _window_experiment_split(args: argparse.Namespace) -> None:
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=args.split_manifest,
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=args.timezone)
+    results, predictions = run_training_window_experiment(
+        features,
+        cutoffs=args.cutoffs,
+        windows_days=tuple(args.windows_days),
+        include_expanding=not args.no_expanding,
+        evaluation_days=args.evaluation_days,
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output_dir / "window_results.csv", index=False)
+    predictions.to_parquet(output_dir / "window_predictions.parquet", index=False)
+    figures = write_window_experiment_figures(results, output_dir / "figures")
+    concise = {
+        "cutoffs": args.cutoffs,
+        "windows_days": args.windows_days,
+        "include_expanding": not args.no_expanding,
+        "evaluation_days": args.evaluation_days,
+        "experiment_count": len(results),
+        "figures": [str(path) for path in figures],
+        "best_mean_mae_window": str(
+            results.groupby("training_window")["mae"].mean().idxmin()
+        ),
+    }
+    _write_json(output_dir / "summary.json", concise)
+    print(json.dumps(concise, indent=2))
+
+
+def _analyze_regimes_split(args: argparse.Namespace) -> None:
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=args.split_manifest,
+        split_name="development",
+        purpose="eda",
+    )
+    _, _, zone_summary = characterize_dataset(data, timezone=args.timezone)
+    monthly, profiles, similarity = analyze_monthly_regimes(data, timezone=args.timezone)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    monthly.to_csv(output_dir / "monthly_demand.csv", index=False)
+    profiles.to_csv(output_dir / "monthly_weekly_profiles.csv", index=False)
+    similarity.to_csv(output_dir / "monthly_profile_similarity.csv")
+    figures = write_regime_figures(
+        monthly, profiles, similarity, zone_summary, output_dir / "figures"
+    )
+    report = {
+        "months": monthly["month"].tolist(),
+        "month_count": len(monthly),
+        "mean_adjacent_month_profile_correlation": float(
+            similarity.to_numpy().diagonal(offset=1).mean()
+        ),
+        "figures": [str(path) for path in figures],
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -235,6 +329,16 @@ def _parser() -> argparse.ArgumentParser:
     process.add_argument("--allow-missing", action="store_true")
     process.set_defaults(handler=_process_months)
 
+    quality = subparsers.add_parser(
+        "summarize-quality", help="combine monthly reports and enforce quality gates"
+    )
+    quality.add_argument("--report-root", required=True)
+    quality.add_argument("--start-month", required=True)
+    quality.add_argument("--end-month", required=True)
+    quality.add_argument("--output-dir", required=True)
+    quality.add_argument("--allow-missing", action="store_true")
+    quality.set_defaults(handler=_summarize_quality)
+
     split_characterize = subparsers.add_parser(
         "characterize-split", help="characterize a complete, access-controlled split"
     )
@@ -256,6 +360,30 @@ def _parser() -> argparse.ArgumentParser:
     backtest.add_argument("--evaluation-start")
     backtest.add_argument("--timezone", default="America/New_York")
     backtest.set_defaults(handler=_backtest_baselines_split)
+
+    windows = subparsers.add_parser(
+        "window-experiment-split",
+        help="compare LightGBM training-history windows on fixed chronological targets",
+    )
+    windows.add_argument("--monthly-root", required=True)
+    windows.add_argument("--split-manifest", required=True)
+    windows.add_argument("--output-dir", required=True)
+    windows.add_argument("--cutoffs", nargs="+", required=True)
+    windows.add_argument("--windows-days", nargs="+", type=int, default=[30, 60, 90, 180, 365])
+    windows.add_argument("--evaluation-days", type=int, default=28)
+    windows.add_argument("--no-expanding", action="store_true")
+    windows.add_argument("--timezone", default="America/New_York")
+    windows.set_defaults(handler=_window_experiment_split)
+
+    regimes = subparsers.add_parser(
+        "analyze-regimes-split",
+        help="measure development-period monthly profiles and generate regime figures",
+    )
+    regimes.add_argument("--monthly-root", required=True)
+    regimes.add_argument("--split-manifest", required=True)
+    regimes.add_argument("--output-dir", required=True)
+    regimes.add_argument("--timezone", default="America/New_York")
+    regimes.set_defaults(handler=_analyze_regimes_split)
     return parser
 
 

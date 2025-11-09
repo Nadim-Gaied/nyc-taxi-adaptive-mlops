@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $rawRoot = Join-Path $projectRoot 'data\raw\tlc\yellow'
+$curl = Get-Command 'curl.exe' -ErrorAction SilentlyContinue
 $current = [datetime]::ParseExact("$StartMonth-01", 'yyyy-MM-dd', $null)
 $last = [datetime]::ParseExact("$EndMonth-01", 'yyyy-MM-dd', $null)
 
@@ -34,9 +35,23 @@ while ($current -le $last) {
     }
     else {
         Write-Host "Downloading: $filename"
-        Invoke-WebRequest -Uri $url -OutFile $partial
+        if ($null -ne $curl) {
+            & $curl.Source `
+                --fail `
+                --location `
+                --retry 3 `
+                --retry-delay 2 `
+                --continue-at - `
+                --output $partial `
+                $url
+            if ($LASTEXITCODE -ne 0) {
+                throw "curl failed for $filename with exit code $LASTEXITCODE"
+            }
+        }
+        else {
+            Invoke-WebRequest -Uri $url -OutFile $partial
+        }
         Move-Item -LiteralPath $partial -Destination $target
     }
     $current = $current.AddMonths(1)
 }
-

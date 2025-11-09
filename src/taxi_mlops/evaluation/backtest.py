@@ -36,9 +36,26 @@ def rolling_baseline_backtest(
             raise ValueError("evaluation_start must include an explicit UTC offset")
         evaluation_start_utc = evaluation_start_utc.tz_convert("UTC")
 
+    candidates = [
+        candidate.loc[candidate["pickup_hour"] >= evaluation_start_utc].reset_index(drop=True)
+        for candidate in _baseline_candidates(data, timezone)
+    ]
+    keys = candidates[0][["pickup_hour", "pickup_zone_id"]]
+    common_available = candidates[0]["prediction"].notna().to_numpy()
+    for candidate in candidates[1:]:
+        if not keys.equals(candidate[["pickup_hour", "pickup_zone_id"]]):
+            raise RuntimeError("baseline candidates do not contain identical target keys")
+        common_available &= candidate["prediction"].notna().to_numpy()
+
+    target_universe = candidates[0][["pickup_hour", "pickup_zone_id"]].copy()
+    target_universe["evaluation_week"] = target_universe["pickup_hour"].dt.tz_convert(
+        timezone
+    ).dt.strftime("%G-W%V")
+    requested_by_week = target_universe.groupby("evaluation_week").size()
+
     weekly_rows: list[dict[str, object]] = []
-    for candidate in _baseline_candidates(data, timezone):
-        eligible = candidate.loc[candidate["pickup_hour"] >= evaluation_start_utc].copy()
+    for candidate in candidates:
+        eligible = candidate.loc[common_available].copy()
         local_time = eligible["pickup_hour"].dt.tz_convert(timezone)
         eligible["evaluation_week"] = local_time.dt.strftime("%G-W%V")
         model_id = str(candidate["model_id"].iloc[0])
@@ -50,6 +67,7 @@ def rolling_baseline_backtest(
                     "evaluation_week": week,
                     "period_start_utc": str(frame["pickup_hour"].min()),
                     "period_end_utc": str(frame["pickup_hour"].max()),
+                    "common_target_coverage": float(len(frame) / requested_by_week.loc[week]),
                     **metrics,
                 }
             )
@@ -69,14 +87,19 @@ def rolling_baseline_backtest(
                 "worst_week": str(worst["evaluation_week"]),
                 "mean_weekly_wape": float(frame["wape"].mean()),
                 "minimum_prediction_coverage": float(frame["prediction_coverage"].min()),
+                "minimum_common_target_coverage": float(
+                    frame["common_target_coverage"].min()
+                ),
             }
         )
     model_summaries.sort(key=lambda item: float(item["mean_weekly_mae"]))
     summary = {
         "evaluation_start_utc": str(evaluation_start_utc),
         "evaluation_end_utc": str(timestamps.max()),
+        "requested_target_rows": len(target_universe),
+        "common_target_rows": int(common_available.sum()),
+        "common_target_coverage": float(common_available.mean()),
         "ranking_metric": "mean_weekly_mae",
         "models_ranked": model_summaries,
     }
     return weekly.reset_index(drop=True), summary
-
