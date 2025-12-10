@@ -78,6 +78,7 @@ def run_training_window_experiment(
     windows_days: tuple[int, ...] = (30, 60, 90, 180, 365),
     include_expanding: bool = True,
     evaluation_days: int = 28,
+    timezone: str = "America/New_York",
     feature_columns: list[str] | None = None,
     model_parameters: dict[str, object] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -108,10 +109,13 @@ def run_training_window_experiment(
     prediction_frames: list[pd.DataFrame] = []
     for raw_cutoff in cutoffs:
         cutoff = _as_utc(raw_cutoff, "cutoff")
-        evaluation_end = cutoff + pd.Timedelta(days=evaluation_days)
+        cutoff_local = cutoff.tz_convert(timezone)
+        evaluation_end = (cutoff_local + pd.DateOffset(days=evaluation_days)).tz_convert(
+            "UTC"
+        )
         evaluation = data.loc[
             data["pickup_hour"].ge(cutoff) & data["pickup_hour"].lt(evaluation_end)
-        ].dropna(subset=feature_columns)
+        ].copy()
         if evaluation.empty:
             raise ValueError(f"no evaluation rows for cutoff {cutoff}")
 
@@ -120,11 +124,11 @@ def run_training_window_experiment(
             training_start = (
                 data["pickup_hour"].min()
                 if window_days is None
-                else cutoff - pd.Timedelta(days=window_days)
+                else (cutoff_local - pd.DateOffset(days=window_days)).tz_convert("UTC")
             )
             train = data.loc[
                 data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(cutoff)
-            ].dropna(subset=feature_columns)
+            ].copy()
             if train.empty:
                 raise ValueError(
                     f"no training rows for cutoff {cutoff} and window {window_days}"
@@ -171,3 +175,108 @@ def run_training_window_experiment(
     results = pd.DataFrame(result_rows).sort_values(["cutoff", "mae", "training_window"])
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     return results.reset_index(drop=True), all_predictions
+
+
+def run_seasonal_gap_experiment(
+    feature_table: pd.DataFrame,
+    *,
+    target_starts: list[str | pd.Timestamp],
+    window_days: int = 90,
+    evaluation_days: int = 90,
+    gap_years: int = 1,
+    timezone: str = "America/New_York",
+    feature_columns: list[str] | None = None,
+    model_parameters: dict[str, object] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compare season-matched and recent windows on identical future targets."""
+
+    if not target_starts:
+        raise ValueError("at least one target start is required")
+    if window_days <= 0 or evaluation_days <= 0 or gap_years <= 0:
+        raise ValueError("window, evaluation, and gap lengths must be positive")
+
+    feature_columns = feature_columns or DEFAULT_FEATURE_COLUMNS
+    required = {"pickup_hour", "pickup_zone_id", "pickup_count", *feature_columns}
+    missing = required.difference(feature_table.columns)
+    if missing:
+        raise ValueError(f"feature table is missing columns: {', '.join(sorted(missing))}")
+
+    data = feature_table.copy()
+    data["pickup_hour"] = pd.to_datetime(data["pickup_hour"], utc=True, errors="raise")
+    data = data.sort_values(["pickup_hour", "pickup_zone_id"])
+    parameters = {**DEFAULT_MODEL_PARAMETERS, **(model_parameters or {})}
+    result_rows: list[dict[str, object]] = []
+    prediction_frames: list[pd.DataFrame] = []
+
+    for raw_target_start in target_starts:
+        target_start_utc = _as_utc(raw_target_start, "target_start")
+        target_start_local = target_start_utc.tz_convert(timezone)
+        target_end_utc = (target_start_local + pd.DateOffset(days=evaluation_days)).tz_convert(
+            "UTC"
+        )
+        seasonal_start_utc = (
+            target_start_local - pd.DateOffset(years=gap_years)
+        ).tz_convert("UTC")
+        seasonal_end_utc = (
+            seasonal_start_utc.tz_convert(timezone) + pd.DateOffset(days=window_days)
+        ).tz_convert("UTC")
+        recent_start_utc = (
+            target_start_local - pd.DateOffset(days=window_days)
+        ).tz_convert("UTC")
+
+        evaluation = data.loc[
+            data["pickup_hour"].ge(target_start_utc)
+            & data["pickup_hour"].lt(target_end_utc)
+        ].copy()
+        if evaluation.empty:
+            raise ValueError(f"no evaluation rows for target start {target_start_utc}")
+
+        strategies = {
+            f"seasonal_{window_days}d_{gap_years}y_gap": (
+                seasonal_start_utc,
+                seasonal_end_utc,
+            ),
+            f"recent_{window_days}d": (recent_start_utc, target_start_utc),
+        }
+        for strategy, (training_start, training_end) in strategies.items():
+            train = data.loc[
+                data["pickup_hour"].ge(training_start)
+                & data["pickup_hour"].lt(training_end)
+            ].copy()
+            if train.empty:
+                raise ValueError(
+                    f"no training rows for target {target_start_utc} and strategy {strategy}"
+                )
+
+            x_train, y_train, x_evaluation = _model_matrices(
+                train, evaluation, feature_columns
+            )
+            model = lgb.LGBMRegressor(**parameters)
+            started = perf_counter()
+            model.fit(x_train, y_train, categorical_feature=["pickup_zone_id"])
+            training_seconds = perf_counter() - started
+
+            predictions = evaluation[["pickup_hour", "pickup_zone_id", "pickup_count"]].copy()
+            predictions["prediction"] = model.predict(x_evaluation).clip(0.0)
+            predictions["target_start"] = target_start_utc
+            predictions["strategy"] = strategy
+            metrics = regression_metrics(predictions)
+            result_rows.append(
+                {
+                    "target_start": str(target_start_utc),
+                    "strategy": strategy,
+                    "training_start": str(train["pickup_hour"].min()),
+                    "training_end": str(train["pickup_hour"].max()),
+                    "evaluation_start": str(evaluation["pickup_hour"].min()),
+                    "evaluation_end": str(evaluation["pickup_hour"].max()),
+                    "training_rows": len(train),
+                    "evaluation_rows": len(evaluation),
+                    "training_seconds": training_seconds,
+                    **metrics,
+                }
+            )
+            prediction_frames.append(predictions)
+
+    results = pd.DataFrame(result_rows).sort_values(["target_start", "strategy"])
+    predictions = pd.concat(prediction_frames, ignore_index=True)
+    return results.reset_index(drop=True), predictions

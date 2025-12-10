@@ -3,7 +3,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from taxi_mlops.baselines import daily_weekly_blend_predictions, weekly_seasonal_predictions
+from taxi_mlops.baselines import (
+    complete_daily_weekly_blend_predictions,
+    daily_weekly_blend_predictions,
+    weekly_seasonal_predictions,
+)
 from taxi_mlops.evaluation import regression_metrics, zone_regression_metrics
 
 
@@ -114,3 +118,27 @@ def test_daily_baseline_matches_local_wall_clock_across_spring_dst() -> None:
     ].iloc[0]
 
     assert target["prediction"] == 30
+
+
+def test_complete_blend_falls_back_when_daily_dst_lag_is_missing() -> None:
+    data = pd.DataFrame(
+        {
+            "pickup_hour": pd.to_datetime(
+                [
+                    "2019-03-03T07:00:00Z",  # 02:00 EST one week earlier
+                    "2019-03-10T06:00:00Z",  # 01:00 EST previous canonical hour
+                    "2019-03-10T07:00:00Z",  # 03:00 EDT; daily 03:00 exists too
+                    "2019-03-11T06:00:00Z",  # 02:00 EDT; prior-day 02:00 is missing
+                ]
+            ),
+            "pickup_zone_id": [1, 1, 1, 1],
+            "pickup_count": [30, 10, 20, 99],
+        }
+    )
+
+    predictions = complete_daily_weekly_blend_predictions(data)
+    target = predictions.loc[
+        predictions["pickup_hour"] == pd.Timestamp("2019-03-11T06:00:00Z")
+    ].iloc[0]
+
+    assert target["prediction"] == 20

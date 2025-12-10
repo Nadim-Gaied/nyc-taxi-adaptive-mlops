@@ -1,0 +1,51 @@
+version: 1
+status: preregistered_before_validation_access
+timezone: America/New_York
+split_manifest: configs/splits.yaml
+lifecycle_policy: configs/lifecycle_policy_v1.yaml
+development_experiment: configs/development_experiments.yaml
+
+data_access:
+  history_splits: [development, policy_validation]
+  target_split: policy_validation
+  purpose: validation
+  allow_locked_replay: false
+
+evaluation:
+  horizon_calendar_days: 28
+  origins:
+    - "2019-07-01T00:00:00-04:00"
+    - "2019-08-01T00:00:00-04:00"
+    - "2019-09-01T00:00:00-04:00"
+    - "2019-10-01T00:00:00-04:00"
+    - "2019-11-01T00:00:00-04:00"
+    - "2019-12-01T00:00:00-05:00"
+  require_identical_targets: true
+  require_complete_predictions: true
+
+model:
+  family: lightgbm_poisson
+  feature_set: full_v1
+  reference_history: recent_365d
+  candidate_histories:
+    - seasonal_90d_1y_gap
+    - recent_90d_plus_seasonal_90d
+    - expanding
+  no_training_baseline: daily_weekly_blend_complete
+
+scorecard:
+  alert_reference: recent_365d
+  promotion_candidates:
+    - seasonal_90d_1y_gap
+    - recent_90d_plus_seasonal_90d
+    - expanding
+  count_warning_weeks: true
+  count_severe_weeks: true
+  count_persistent_warning_events: true
+  apply_all_frozen_promotion_gates: true
+  report_promotion_pressure_not_stateful_switches: true
+
+interpretation_contract:
+  tune_thresholds_during_run: false
+  validation_is_single_use: true
+  locked_replay_remains_unopened: true

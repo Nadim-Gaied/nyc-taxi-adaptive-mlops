@@ -1,5 +1,3 @@
 # NYC taxi demand forecasting
 
-The data and baseline stages showed that demand is uneven across zones and changes over time. This stage compares training windows and demand regimes on common future targets, while checking input quality before evaluation. These tests guide which model comparisons are worth carrying forward.
-
-![Early zone error profile](figures/zone_tail/best-baseline-zone-tail.png)
+Models are compared on the same future windows with features available at forecast time. LightGBM with a Poisson objective outperformed the seasonal, ridge, and Poisson regression alternatives. Recent-demand features mattered; longer training histories did not show a reliable benefit over a rolling year. The model-update rules are fixed before the later historical replay.

@@ -1,0 +1,124 @@
+version: 1
+split: development
+split_manifest: configs/splits.yaml
+timezone: America/New_York
+random_seed: 42
+
+evaluation:
+  horizon_calendar_days: 28
+  origins:
+    - "2018-04-01T00:00:00-04:00"
+    - "2018-05-01T00:00:00-04:00"
+    - "2018-06-01T00:00:00-04:00"
+    - "2018-07-01T00:00:00-04:00"
+    - "2018-08-01T00:00:00-04:00"
+    - "2018-09-01T00:00:00-04:00"
+    - "2018-10-01T00:00:00-04:00"
+    - "2018-11-01T00:00:00-04:00"
+    - "2018-12-01T00:00:00-05:00"
+    - "2019-01-01T00:00:00-05:00"
+    - "2019-02-01T00:00:00-05:00"
+    - "2019-03-01T00:00:00-05:00"
+    - "2019-04-01T00:00:00-04:00"
+    - "2019-05-01T00:00:00-04:00"
+    - "2019-06-01T00:00:00-04:00"
+  require_identical_targets: true
+  require_complete_predictions: true
+
+metrics:
+  primary: wape
+  report:
+    - mae
+    - mean_bias
+    - prediction_coverage
+    - macro_zone_mae
+    - zone_mae_p50
+    - zone_mae_p90
+    - zone_mae_p95
+    - zone_mae_max
+  temporal_period: week
+  temporal_tail_quantiles: [0.50, 0.90]
+
+demand_tiers:
+  source: training_only
+  method: cumulative_demand_share
+  boundaries: [0.80, 0.95]
+  labels: [high, medium, low]
+
+reference:
+  model: lightgbm_poisson
+  training_history: recent_365d
+  feature_set: full_v1
+
+feature_groups:
+  calendar_zone:
+    - pickup_zone_id
+    - hour_of_day
+    - day_of_week
+    - month
+    - day_of_year
+    - is_weekend
+    - hour_sin
+    - hour_cos
+    - week_sin
+    - week_cos
+  short_term:
+    - lag_1h
+    - rolling_mean_24h
+    - rolling_std_24h
+  daily:
+    - lag_24h
+  weekly:
+    - lag_168h
+    - rolling_mean_168h
+    - rolling_std_168h
+
+feature_sets:
+  calendar_zone: [calendar_zone]
+  calendar_plus_short: [calendar_zone, short_term]
+  calendar_short_daily: [calendar_zone, short_term, daily]
+  calendar_short_weekly: [calendar_zone, short_term, weekly]
+  full_v1: [calendar_zone, short_term, daily, weekly]
+  full_without_short: [calendar_zone, daily, weekly]
+  full_without_daily: [calendar_zone, short_term, weekly]
+  full_without_weekly: [calendar_zone, short_term, daily]
+
+candidate_models:
+  - daily_weekly_blend
+  - ridge
+  - poisson_regression
+  - lightgbm_poisson
+
+model_parameters:
+  ridge:
+    alpha: 1.0
+    solver: lsqr
+    tol: 0.0001
+  poisson_regression:
+    alpha: 1.0
+    solver: lbfgs
+    max_iter: 100
+    tol: 0.0001
+  lightgbm_poisson: {}
+
+poisson_screen:
+  origins:
+    - "2018-04-01T00:00:00-04:00"
+    - "2018-07-01T00:00:00-04:00"
+    - "2018-10-01T00:00:00-04:00"
+  alphas: [0.001, 0.01, 0.1, 1.0]
+  solver: lbfgs
+  max_iter: 300
+  tol: 0.0001
+
+candidate_training_histories:
+  - recent_90d
+  - recent_180d
+  - recent_365d
+  - expanding
+  - seasonal_90d_1y_gap
+  - recent_90d_plus_seasonal_90d
+
+access_policy:
+  allow_policy_validation: false
+  allow_locked_replay: false

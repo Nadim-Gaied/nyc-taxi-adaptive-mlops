@@ -81,3 +81,59 @@ def daily_weekly_blend_predictions(
     )
     predictions["model_id"] = f"daily_weekly_blend_{daily_weight:.2f}_{weekly_weight:.2f}"
     return predictions.drop(columns=["daily_prediction", "weekly_prediction"])
+
+
+def complete_daily_weekly_blend_predictions(
+    data: pd.DataFrame,
+    *,
+    daily_weight: float = 0.5,
+    timezone: str = "America/New_York",
+) -> pd.DataFrame:
+    """Blend daily and weekly lags with a leakage-safe DST fallback chain.
+
+    When one wall-clock lag is unavailable at a DST boundary, use the other.
+    If both are unavailable, fall back to the previous canonical hour.
+    """
+
+    if not 0.0 <= daily_weight <= 1.0:
+        raise ValueError("daily_weight must be between zero and one")
+
+    daily = weekly_seasonal_predictions(
+        data, lag_hours=24, timezone=timezone
+    ).rename(columns={"prediction": "daily_prediction"})
+    weekly = weekly_seasonal_predictions(data, lag_hours=168, timezone=timezone)[
+        ["pickup_hour", "pickup_zone_id", "prediction"]
+    ].rename(columns={"prediction": "weekly_prediction"})
+    previous = weekly_seasonal_predictions(data, lag_hours=1, timezone=timezone)[
+        ["pickup_hour", "pickup_zone_id", "prediction"]
+    ].rename(columns={"prediction": "previous_prediction"})
+    predictions = daily.merge(
+        weekly,
+        on=["pickup_hour", "pickup_zone_id"],
+        how="left",
+        validate="1:1",
+    ).merge(
+        previous,
+        on=["pickup_hour", "pickup_zone_id"],
+        how="left",
+        validate="1:1",
+    )
+    both_available = predictions["daily_prediction"].notna() & predictions[
+        "weekly_prediction"
+    ].notna()
+    predictions["prediction"] = float("nan")
+    predictions.loc[both_available, "prediction"] = (
+        daily_weight * predictions.loc[both_available, "daily_prediction"]
+        + (1.0 - daily_weight)
+        * predictions.loc[both_available, "weekly_prediction"]
+    )
+    predictions["prediction"] = (
+        predictions["prediction"]
+        .fillna(predictions["weekly_prediction"])
+        .fillna(predictions["daily_prediction"])
+        .fillna(predictions["previous_prediction"])
+    )
+    predictions["model_id"] = "daily_weekly_blend_complete"
+    return predictions.drop(
+        columns=["daily_prediction", "weekly_prediction", "previous_prediction"]
+    )

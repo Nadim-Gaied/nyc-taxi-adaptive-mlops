@@ -1,0 +1,87 @@
+version: 1
+status: replay_frozen_after_policy_validation
+timezone: America/New_York
+decision_cadence_days: 7
+
+production_candidate:
+  model_family: lightgbm_poisson
+  feature_set: full_v1
+  default_training_history: recent_365d
+
+model_pool:
+  evaluate_before_retraining: true
+  seasonal_reuse_candidate: seasonal_90d_1y_gap
+  expanding_reference: expanding
+  eligible_candidate_histories:
+    - seasonal_90d_1y_gap
+    - recent_90d_plus_seasonal_90d
+    - expanding
+
+performance_monitor:
+  scoring_delay_hours: 0
+  weekly_wape_warning: 0.142059
+  weekly_wape_severe: 0.159875
+  absolute_mean_bias_warning: 1.438906
+  persistence_weeks: 2
+  severe_event_evaluates_candidates_immediately: true
+  data_drift_can_trigger_retraining_alone: false
+
+demand_tier_monitor:
+  evaluation_window_days: 28
+  reference_history: recent_365d
+  p90_wape:
+    high: 0.114870
+    medium: 0.141455
+    low: 0.432436
+  low_tier_can_trigger_retraining_alone: false
+
+promotion:
+  evaluation_window_days: 28
+  required_prediction_coverage: 1.0
+  minimum_relative_wape_improvement: 0.01
+  maximum_tier_wape_regression: 0.005
+  maximum_zone_mae_p95_regression: 1.0
+  require_bias_not_worse: true
+  cooldown_weeks: 4
+
+retraining:
+  challenger_history: recent_90d_plus_seasonal_90d
+  fallback_history: recent_365d
+  retain_valid_challenger: true
+
+development_evidence:
+  weekly_wape_reference: recent_365d
+  weekly_wape_p90: 0.142059
+  weekly_wape_p95: 0.159875
+  hybrid_relative_wape_change_percent: -0.4303
+  hybrid_block_bootstrap_95_percent: [-0.8329, 0.0166]
+  seasonal_relative_wape_change_percent: -0.1285
+  seasonal_block_bootstrap_95_percent: [-0.4909, 0.1327]
+  expanding_relative_wape_change_percent: -0.1913
+  expanding_block_bootstrap_95_percent: [-0.4136, 0.0397]
+
+policy_validation_evidence:
+  period: 2019-07-01/2019-12-29
+  origins: 6
+  evaluated_weeks: 24
+  warning_weeks: 6
+  severe_weeks: 3
+  persistent_warning_events: 1
+  trigger_weeks: 4
+  triggered_origins: 2
+  promotion_pressure_events: 1
+  promoted_candidate_proxy: expanding
+  promoted_origin: "2019-12-01T00:00:00-05:00"
+  thresholds_changed_after_validation: false
+  mean_wape:
+    recent_365d: 0.134061
+    seasonal_90d_1y_gap: 0.133344
+    recent_90d_plus_seasonal_90d: 0.133621
+    expanding: 0.133428
+    daily_weekly_blend_complete: 0.196668
+
+access_policy:
+  development_complete: true
+  policy_validation_opened: true
+  policy_validation_complete: true
+  locked_replay_opened: false

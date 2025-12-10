@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from taxi_mlops.analysis import (
     analyze_monthly_regimes,
@@ -28,7 +29,21 @@ from taxi_mlops.ingestion import (
     summarize_quality_reports,
 )
 from taxi_mlops.ingestion.yellow_taxi import build_zone_hour_dataset, read_trip_file
-from taxi_mlops.models import run_training_window_experiment
+from taxi_mlops.models import (
+    run_feature_ablation_experiment,
+    run_model_family_experiment,
+    run_seasonal_gap_experiment,
+    run_training_history_experiment,
+    run_training_window_experiment,
+)
+from taxi_mlops.policies import (
+    build_alert_scorecard,
+    build_promotion_scorecard,
+    load_lifecycle_policy,
+    load_policy_validation_plan,
+    run_complete_baseline_validation,
+    summarize_policy_validation,
+)
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
@@ -217,6 +232,7 @@ def _window_experiment_split(args: argparse.Namespace) -> None:
         windows_days=tuple(args.windows_days),
         include_expanding=not args.no_expanding,
         evaluation_days=args.evaluation_days,
+        timezone=args.timezone,
     )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +252,505 @@ def _window_experiment_split(args: argparse.Namespace) -> None:
     }
     _write_json(output_dir / "summary.json", concise)
     print(json.dumps(concise, indent=2))
+
+
+def _feature_ablation_split(args: argparse.Namespace) -> None:
+    with Path(args.experiment_config).open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    evaluation_config = config["evaluation"]
+    tier_config = config["demand_tiers"]
+    feature_groups = config["feature_groups"]
+    feature_sets = {
+        name: [
+            column
+            for group_name in group_names
+            for column in feature_groups[group_name]
+        ]
+        for name, group_names in config["feature_sets"].items()
+    }
+    if args.feature_sets:
+        unknown = sorted(set(args.feature_sets).difference(feature_sets))
+        if unknown:
+            raise ValueError(f"unknown feature sets: {', '.join(unknown)}")
+        feature_sets = {name: feature_sets[name] for name in args.feature_sets}
+
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=config["split_manifest"],
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=config["timezone"])
+    results, tier_results = run_feature_ablation_experiment(
+        features,
+        cutoffs=evaluation_config["origins"],
+        feature_sets=feature_sets,
+        training_window_days=args.training_window_days,
+        evaluation_days=evaluation_config["horizon_calendar_days"],
+        timezone=config["timezone"],
+        tier_boundaries=tier_config["boundaries"],
+        tier_labels=tier_config["labels"],
+        checkpoint_dir=Path(args.output_dir) / "checkpoints",
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output_dir / "feature_ablation_results.csv", index=False)
+    tier_results.to_csv(output_dir / "feature_ablation_tier_results.csv", index=False)
+    aggregate = (
+        results.groupby("feature_set")
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_mae=("mae", "mean"),
+            mean_zone_mae_p95=("zone_mae_p95", "mean"),
+            mean_training_seconds=("training_seconds", "mean"),
+        )
+        .sort_values("mean_wape")
+        .reset_index()
+    )
+    aggregate.to_csv(output_dir / "feature_ablation_summary.csv", index=False)
+    tier_summary = (
+        tier_results.groupby(["feature_set", "demand_tier"])
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_zones=("zones", "mean"),
+        )
+        .reset_index()
+    )
+    tier_summary.to_csv(output_dir / "feature_ablation_tier_summary.csv", index=False)
+
+    reference_feature_set = config["reference"]["feature_set"]
+    paired_summary: list[dict[str, object]] = []
+    if reference_feature_set in set(results["feature_set"]):
+        reference = results.loc[
+            results["feature_set"].eq(reference_feature_set)
+        ].set_index("cutoff")
+        for feature_set_name, candidate in results.groupby("feature_set"):
+            candidate = candidate.set_index("cutoff").loc[reference.index]
+            wape_delta = candidate["wape"] - reference["wape"]
+            paired_summary.append(
+                {
+                    "feature_set": feature_set_name,
+                    "reference_feature_set": reference_feature_set,
+                    "mean_wape": float(candidate["wape"].mean()),
+                    "relative_wape_change_percent": float(
+                        100 * wape_delta.mean() / reference["wape"].mean()
+                    ),
+                    "origins_beating_reference": int(wape_delta.lt(0).sum()),
+                    "origins_tied_reference": int(wape_delta.abs().lt(1e-12).sum()),
+                    "worst_origin_wape_delta_percentage_points": float(
+                        100 * wape_delta.max()
+                    ),
+                }
+            )
+        pd.DataFrame(paired_summary).sort_values("mean_wape").to_csv(
+            output_dir / "feature_ablation_paired_summary.csv", index=False
+        )
+    report = {
+        "experiment_config": str(args.experiment_config),
+        "training_window_days": args.training_window_days,
+        "origin_count": len(evaluation_config["origins"]),
+        "feature_set_count": len(feature_sets),
+        "best_mean_wape_feature_set": str(aggregate.iloc[0]["feature_set"]),
+        "reference_feature_set": reference_feature_set,
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
+
+
+def _model_family_experiment_split(args: argparse.Namespace) -> None:
+    with Path(args.experiment_config).open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    evaluation_config = config["evaluation"]
+    tier_config = config["demand_tiers"]
+    feature_groups = config["feature_groups"]
+    selected_feature_set = config["reference"]["feature_set"]
+    selected_groups = config["feature_sets"][selected_feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+    model_names = args.models or config["candidate_models"]
+
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=config["split_manifest"],
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=config["timezone"])
+    results, tier_results = run_model_family_experiment(
+        features,
+        cutoffs=evaluation_config["origins"],
+        feature_columns=feature_columns,
+        model_names=model_names,
+        training_window_days=args.training_window_days,
+        evaluation_days=evaluation_config["horizon_calendar_days"],
+        timezone=config["timezone"],
+        tier_boundaries=tier_config["boundaries"],
+        tier_labels=tier_config["labels"],
+        model_parameters=config.get("model_parameters"),
+        checkpoint_dir=Path(args.output_dir) / "checkpoints",
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output_dir / "model_family_results.csv", index=False)
+    tier_results.to_csv(output_dir / "model_family_tier_results.csv", index=False)
+    aggregate = (
+        results.groupby("model_name")
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_mae=("mae", "mean"),
+            mean_zone_mae_p95=("zone_mae_p95", "mean"),
+            mean_training_seconds=("training_seconds", "mean"),
+            mean_inference_seconds=("inference_seconds", "mean"),
+        )
+        .sort_values("mean_wape")
+        .reset_index()
+    )
+    aggregate.to_csv(output_dir / "model_family_summary.csv", index=False)
+    tier_summary = (
+        tier_results.groupby(["model_name", "demand_tier"])
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_zones=("zones", "mean"),
+        )
+        .reset_index()
+    )
+    tier_summary.to_csv(output_dir / "model_family_tier_summary.csv", index=False)
+    report = {
+        "experiment_config": str(args.experiment_config),
+        "feature_set": selected_feature_set,
+        "training_window_days": args.training_window_days,
+        "origin_count": len(evaluation_config["origins"]),
+        "model_names": list(model_names),
+        "best_mean_wape_model": str(aggregate.iloc[0]["model_name"]),
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
+
+
+def _poisson_screen_split(args: argparse.Namespace) -> None:
+    with Path(args.experiment_config).open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    screen_config = config["poisson_screen"]
+    evaluation_config = config["evaluation"]
+    tier_config = config["demand_tiers"]
+    feature_groups = config["feature_groups"]
+    selected_feature_set = config["reference"]["feature_set"]
+    selected_groups = config["feature_sets"][selected_feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=config["split_manifest"],
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=config["timezone"])
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result_frames: list[pd.DataFrame] = []
+    tier_frames: list[pd.DataFrame] = []
+    for alpha in screen_config["alphas"]:
+        parameter_id = f"alpha_{float(alpha):g}".replace(".", "p")
+        parameters = {
+            "poisson_regression": {
+                "alpha": float(alpha),
+                "solver": screen_config["solver"],
+                "max_iter": int(screen_config["max_iter"]),
+                "tol": float(screen_config["tol"]),
+            }
+        }
+        results, tier_results = run_model_family_experiment(
+            features,
+            cutoffs=screen_config["origins"],
+            feature_columns=feature_columns,
+            model_names=["poisson_regression"],
+            training_window_days=args.training_window_days,
+            evaluation_days=evaluation_config["horizon_calendar_days"],
+            timezone=config["timezone"],
+            tier_boundaries=tier_config["boundaries"],
+            tier_labels=tier_config["labels"],
+            model_parameters=parameters,
+            checkpoint_dir=output_dir / "checkpoints" / parameter_id,
+        )
+        results["parameter_id"] = parameter_id
+        results["alpha"] = float(alpha)
+        tier_results["parameter_id"] = parameter_id
+        tier_results["alpha"] = float(alpha)
+        result_frames.append(results)
+        tier_frames.append(tier_results)
+
+    all_results = pd.concat(result_frames, ignore_index=True)
+    all_tiers = pd.concat(tier_frames, ignore_index=True)
+    all_results.to_csv(output_dir / "poisson_screen_results.csv", index=False)
+    all_tiers.to_csv(output_dir / "poisson_screen_tier_results.csv", index=False)
+    summary = (
+        all_results.groupby(["parameter_id", "alpha"])
+        .agg(
+            origins=("cutoff", "size"),
+            converged_origins=("hit_iteration_limit", lambda values: int((~values).sum())),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_mae=("mae", "mean"),
+            mean_bias=("mean_bias", "mean"),
+            mean_training_seconds=("training_seconds", "mean"),
+            mean_iterations=("iterations", "mean"),
+        )
+        .sort_values("mean_wape")
+        .reset_index()
+    )
+    summary.to_csv(output_dir / "poisson_screen_summary.csv", index=False)
+    eligible = summary.loc[summary["converged_origins"].eq(len(screen_config["origins"]))]
+    report = {
+        "experiment_config": str(args.experiment_config),
+        "feature_set": selected_feature_set,
+        "training_window_days": args.training_window_days,
+        "origins": screen_config["origins"],
+        "alphas": screen_config["alphas"],
+        "best_mean_wape_parameter": str(summary.iloc[0]["parameter_id"]),
+        "best_fully_converged_parameter": (
+            str(eligible.iloc[0]["parameter_id"]) if not eligible.empty else None
+        ),
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
+
+
+def _training_history_experiment_split(args: argparse.Namespace) -> None:
+    with Path(args.experiment_config).open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    evaluation_config = config["evaluation"]
+    tier_config = config["demand_tiers"]
+    feature_groups = config["feature_groups"]
+    selected_feature_set = config["reference"]["feature_set"]
+    selected_groups = config["feature_sets"][selected_feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+    strategies = args.strategies or config["candidate_training_histories"]
+
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=config["split_manifest"],
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=config["timezone"])
+    results, tier_results, weekly_results = run_training_history_experiment(
+        features,
+        cutoffs=evaluation_config["origins"],
+        feature_columns=feature_columns,
+        strategies=strategies,
+        evaluation_days=evaluation_config["horizon_calendar_days"],
+        timezone=config["timezone"],
+        tier_boundaries=tier_config["boundaries"],
+        tier_labels=tier_config["labels"],
+        model_parameters=config.get("model_parameters", {}).get("lightgbm_poisson"),
+        checkpoint_dir=Path(args.output_dir) / "checkpoints",
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output_dir / "training_history_results.csv", index=False)
+    tier_results.to_csv(output_dir / "training_history_tier_results.csv", index=False)
+    weekly_results.to_csv(output_dir / "training_history_weekly_results.csv", index=False)
+
+    aggregate = (
+        results.groupby("training_history")
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_origin_wape=("wape", "max"),
+            mean_mae=("mae", "mean"),
+            mean_zone_mae_p95=("zone_mae_p95", "mean"),
+            mean_training_seconds=("training_seconds", "mean"),
+            mean_inference_seconds=("inference_seconds", "mean"),
+        )
+        .reset_index()
+    )
+    weekly_summary = (
+        weekly_results.groupby("training_history")
+        .agg(
+            mean_weekly_wape=("wape", "mean"),
+            p90_weekly_wape=("wape", lambda values: float(values.quantile(0.90))),
+            worst_weekly_wape=("wape", "max"),
+        )
+        .reset_index()
+    )
+    aggregate = aggregate.merge(
+        weekly_summary, on="training_history", how="left", validate="1:1"
+    ).sort_values("mean_wape")
+    aggregate.to_csv(output_dir / "training_history_summary.csv", index=False)
+
+    tier_summary = (
+        tier_results.groupby(["training_history", "demand_tier"])
+        .agg(
+            origins=("cutoff", "size"),
+            mean_wape=("wape", "mean"),
+            worst_wape=("wape", "max"),
+            mean_zones=("zones", "mean"),
+        )
+        .reset_index()
+    )
+    tier_summary.to_csv(output_dir / "training_history_tier_summary.csv", index=False)
+
+    reference_name = "recent_365d"
+    paired_rows: list[dict[str, object]] = []
+    if reference_name in set(results["training_history"]):
+        reference = results.loc[
+            results["training_history"].eq(reference_name)
+        ].set_index("cutoff")
+        for strategy, candidate in results.groupby("training_history"):
+            candidate = candidate.set_index("cutoff").loc[reference.index]
+            delta = candidate["wape"] - reference["wape"]
+            paired_rows.append(
+                {
+                    "training_history": strategy,
+                    "reference": reference_name,
+                    "relative_wape_change_percent": float(
+                        100 * delta.mean() / reference["wape"].mean()
+                    ),
+                    "origins_beating_reference": int(delta.lt(0).sum()),
+                    "origins_tied_reference": int(delta.abs().lt(1e-12).sum()),
+                    "worst_origin_delta_percentage_points": float(100 * delta.max()),
+                }
+            )
+        pd.DataFrame(paired_rows).sort_values("relative_wape_change_percent").to_csv(
+            output_dir / "training_history_paired_summary.csv", index=False
+        )
+    report = {
+        "experiment_config": str(args.experiment_config),
+        "feature_set": selected_feature_set,
+        "origin_count": len(evaluation_config["origins"]),
+        "strategies": list(strategies),
+        "best_mean_wape_history": str(aggregate.iloc[0]["training_history"]),
+        "reference_history": reference_name,
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
+
+
+def _policy_validation_split(args: argparse.Namespace) -> None:
+    plan_path = Path(args.validation_config)
+    plan = load_policy_validation_plan(plan_path)
+    project_root = plan_path.resolve().parent.parent
+
+    def resolve_plan_path(value: object) -> Path:
+        path = Path(str(value))
+        return path if path.is_absolute() else project_root / path
+
+    policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
+    with resolve_plan_path(plan["development_experiment"]).open(
+        encoding="utf-8"
+    ) as handle:
+        development_config = yaml.safe_load(handle)
+
+    evaluation_config = plan["evaluation"]
+    model_config = plan["model"]
+    access_config = plan["data_access"]
+    tier_config = development_config["demand_tiers"]
+    feature_groups = development_config["feature_groups"]
+    selected_feature_set = model_config["feature_set"]
+    if selected_feature_set != policy["production_candidate"]["feature_set"]:
+        raise ValueError("validation feature set differs from the frozen lifecycle policy")
+    selected_groups = development_config["feature_sets"][selected_feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+    reference_history = str(model_config["reference_history"])
+    candidate_histories = [str(value) for value in model_config["candidate_histories"]]
+    strategies = [reference_history, *candidate_histories]
+
+    split_manifest = resolve_plan_path(plan["split_manifest"])
+    data_frames = [
+        load_named_split(
+            monthly_root=args.monthly_root,
+            manifest_path=split_manifest,
+            split_name=split_name,
+            purpose=str(access_config["purpose"]),
+        )
+        for split_name in access_config["history_splits"]
+    ]
+    data = (
+        pd.concat(data_frames, ignore_index=True)
+        .sort_values(["pickup_hour", "pickup_zone_id"])
+        .reset_index(drop=True)
+    )
+    features = build_feature_table(data, timezone=str(plan["timezone"]))
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results, tier_results, weekly_results = run_training_history_experiment(
+        features,
+        cutoffs=evaluation_config["origins"],
+        feature_columns=feature_columns,
+        strategies=strategies,
+        evaluation_days=int(evaluation_config["horizon_calendar_days"]),
+        timezone=str(plan["timezone"]),
+        tier_boundaries=tier_config["boundaries"],
+        tier_labels=tier_config["labels"],
+        model_parameters=development_config.get("model_parameters", {}).get(
+            "lightgbm_poisson"
+        ),
+        checkpoint_dir=output_dir / "checkpoints",
+    )
+    baseline_results, baseline_tiers, baseline_weeks = (
+        run_complete_baseline_validation(
+            data,
+            cutoffs=evaluation_config["origins"],
+            evaluation_days=int(evaluation_config["horizon_calendar_days"]),
+            timezone=str(plan["timezone"]),
+            tier_boundaries=tier_config["boundaries"],
+            tier_labels=tier_config["labels"],
+        )
+    )
+    results = pd.concat([results, baseline_results], ignore_index=True).sort_values(
+        ["cutoff", "wape", "training_history"]
+    )
+    tier_results = pd.concat(
+        [tier_results, baseline_tiers], ignore_index=True
+    ).sort_values(["cutoff", "training_history", "demand_tier"])
+    weekly_results = pd.concat(
+        [weekly_results, baseline_weeks], ignore_index=True
+    ).sort_values(["cutoff", "training_history", "week_index"])
+
+    alert_scorecard = build_alert_scorecard(
+        weekly_results, policy, reference_history=reference_history
+    )
+    promotion_scorecard = build_promotion_scorecard(
+        results,
+        tier_results,
+        alert_scorecard,
+        policy,
+        reference_history=reference_history,
+        candidate_histories=candidate_histories,
+    )
+    summary = summarize_policy_validation(
+        results,
+        alert_scorecard,
+        promotion_scorecard,
+        reference_history=reference_history,
+    )
+    summary["validation_config"] = str(plan_path)
+    summary["locked_replay_opened"] = False
+
+    results.to_csv(output_dir / "policy_validation_results.csv", index=False)
+    tier_results.to_csv(output_dir / "policy_validation_tier_results.csv", index=False)
+    weekly_results.to_csv(output_dir / "policy_validation_weekly_results.csv", index=False)
+    alert_scorecard.to_csv(output_dir / "policy_validation_alerts.csv", index=False)
+    promotion_scorecard.to_csv(
+        output_dir / "policy_validation_promotions.csv", index=False
+    )
+    _write_json(output_dir / "summary.json", summary)
+    print(json.dumps(summary, indent=2))
 
 
 def _analyze_regimes_split(args: argparse.Namespace) -> None:
@@ -262,6 +777,50 @@ def _analyze_regimes_split(args: argparse.Namespace) -> None:
             similarity.to_numpy().diagonal(offset=1).mean()
         ),
         "figures": [str(path) for path in figures],
+    }
+    _write_json(output_dir / "summary.json", report)
+    print(json.dumps(report, indent=2))
+
+
+def _seasonal_gap_experiment_split(args: argparse.Namespace) -> None:
+    data = load_named_split(
+        monthly_root=args.monthly_root,
+        manifest_path=args.split_manifest,
+        split_name="development",
+        purpose="development",
+    )
+    features = build_feature_table(data, timezone=args.timezone)
+    results, predictions = run_seasonal_gap_experiment(
+        features,
+        target_starts=args.target_starts,
+        window_days=args.window_days,
+        evaluation_days=args.evaluation_days,
+        gap_years=args.gap_years,
+        timezone=args.timezone,
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output_dir / "seasonal_gap_results.csv", index=False)
+    predictions.to_parquet(output_dir / "seasonal_gap_predictions.parquet", index=False)
+    aggregate = (
+        results.groupby("strategy")
+        .agg(
+            mean_mae=("mae", "mean"),
+            worst_mae=("mae", "max"),
+            mean_wape=("wape", "mean"),
+            mean_zone_mae_p95=("zone_mae_p95", "mean"),
+            mean_training_seconds=("training_seconds", "mean"),
+        )
+        .reset_index()
+        .to_dict(orient="records")
+    )
+    report = {
+        "target_starts": args.target_starts,
+        "window_days": args.window_days,
+        "evaluation_days": args.evaluation_days,
+        "gap_years": args.gap_years,
+        "experiment_count": len(results),
+        "aggregate": aggregate,
     }
     _write_json(output_dir / "summary.json", report)
     print(json.dumps(report, indent=2))
@@ -375,6 +934,57 @@ def _parser() -> argparse.ArgumentParser:
     windows.add_argument("--timezone", default="America/New_York")
     windows.set_defaults(handler=_window_experiment_split)
 
+    feature_ablation = subparsers.add_parser(
+        "feature-ablation-split",
+        help="compare feature groups on common development-period targets",
+    )
+    feature_ablation.add_argument("--monthly-root", required=True)
+    feature_ablation.add_argument("--experiment-config", required=True)
+    feature_ablation.add_argument("--output-dir", required=True)
+    feature_ablation.add_argument("--training-window-days", type=int, default=365)
+    feature_ablation.add_argument("--feature-sets", nargs="+")
+    feature_ablation.set_defaults(handler=_feature_ablation_split)
+
+    model_family = subparsers.add_parser(
+        "model-family-experiment-split",
+        help="compare production-friendly model families on common targets",
+    )
+    model_family.add_argument("--monthly-root", required=True)
+    model_family.add_argument("--experiment-config", required=True)
+    model_family.add_argument("--output-dir", required=True)
+    model_family.add_argument("--training-window-days", type=int, default=365)
+    model_family.add_argument("--models", nargs="+")
+    model_family.set_defaults(handler=_model_family_experiment_split)
+
+    poisson_screen = subparsers.add_parser(
+        "poisson-screen-split",
+        help="screen Poisson regularization and convergence on early development origins",
+    )
+    poisson_screen.add_argument("--monthly-root", required=True)
+    poisson_screen.add_argument("--experiment-config", required=True)
+    poisson_screen.add_argument("--output-dir", required=True)
+    poisson_screen.add_argument("--training-window-days", type=int, default=365)
+    poisson_screen.set_defaults(handler=_poisson_screen_split)
+
+    training_history = subparsers.add_parser(
+        "training-history-experiment-split",
+        help="compare recent, expanding, seasonal, and hybrid histories",
+    )
+    training_history.add_argument("--monthly-root", required=True)
+    training_history.add_argument("--experiment-config", required=True)
+    training_history.add_argument("--output-dir", required=True)
+    training_history.add_argument("--strategies", nargs="+")
+    training_history.set_defaults(handler=_training_history_experiment_split)
+
+    policy_validation = subparsers.add_parser(
+        "validate-lifecycle-policy-split",
+        help="run the pre-registered lifecycle scorecard on policy validation",
+    )
+    policy_validation.add_argument("--monthly-root", required=True)
+    policy_validation.add_argument("--validation-config", required=True)
+    policy_validation.add_argument("--output-dir", required=True)
+    policy_validation.set_defaults(handler=_policy_validation_split)
+
     regimes = subparsers.add_parser(
         "analyze-regimes-split",
         help="measure development-period monthly profiles and generate regime figures",
@@ -384,6 +994,20 @@ def _parser() -> argparse.ArgumentParser:
     regimes.add_argument("--output-dir", required=True)
     regimes.add_argument("--timezone", default="America/New_York")
     regimes.set_defaults(handler=_analyze_regimes_split)
+
+    seasonal_gap = subparsers.add_parser(
+        "seasonal-gap-experiment-split",
+        help="compare a season-matched historical window with the recent window",
+    )
+    seasonal_gap.add_argument("--monthly-root", required=True)
+    seasonal_gap.add_argument("--split-manifest", required=True)
+    seasonal_gap.add_argument("--output-dir", required=True)
+    seasonal_gap.add_argument("--target-starts", nargs="+", required=True)
+    seasonal_gap.add_argument("--window-days", type=int, default=90)
+    seasonal_gap.add_argument("--evaluation-days", type=int, default=90)
+    seasonal_gap.add_argument("--gap-years", type=int, default=1)
+    seasonal_gap.add_argument("--timezone", default="America/New_York")
+    seasonal_gap.set_defaults(handler=_seasonal_gap_experiment_split)
     return parser
 
 
