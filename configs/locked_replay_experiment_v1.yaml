@@ -1,0 +1,106 @@
+version: 1
+status: frozen_ready_for_locked_replay
+timezone: America/New_York
+split_manifest: configs/splits.yaml
+lifecycle_policy: configs/lifecycle_policy_final_v1.yaml
+random_seed: 42
+
+access:
+  history_splits: [development, policy_validation]
+  replay_split: locked_replay
+  purpose: replay
+  open_locked_replay_during_engine_development: false
+
+clock:
+  start: "2020-01-01T00:00:00-05:00"
+  end: "2026-01-01T00:00:00-05:00"
+  prediction_cadence_hours: 1
+  decision_cadence_days: 7
+  score_labels_before_decision: true
+  decide_before_next_prediction: true
+
+initialization:
+  active_model_history: recent_365d
+  active_model_cutoff: "2020-01-01T00:00:00-05:00"
+  seed_registry_from_policy_validation: true
+  seed_origins:
+    - "2019-07-01T00:00:00-04:00"
+    - "2019-08-01T00:00:00-04:00"
+    - "2019-09-01T00:00:00-04:00"
+    - "2019-10-01T00:00:00-04:00"
+    - "2019-11-01T00:00:00-04:00"
+    - "2019-12-01T00:00:00-05:00"
+  seed_histories:
+    - recent_365d
+    - seasonal_90d_1y_gap
+    - recent_90d_plus_seasonal_90d
+    - expanding
+
+strategies:
+  never_retrain:
+    retrain: false
+    reuse_registered_models: false
+  fixed_periodic_28d:
+    retrain_every_calendar_days: 28
+    training_history: recent_365d
+    require_promotion_gates: false
+    reuse_registered_models: false
+  performance_triggered:
+    use_frozen_monitor: true
+    reuse_registered_models: false
+    challenger_history: recent_90d_plus_seasonal_90d
+    require_promotion_gates: true
+  adaptive_reuse_and_retrain:
+    use_frozen_monitor: true
+    evaluate_registry_before_retraining: true
+    registry_candidate_must_preexist_evaluation_window: true
+    challenger_history: recent_90d_plus_seasonal_90d
+    require_promotion_gates: true
+
+challenger_evaluation:
+  window_calendar_days: 28
+  minimum_replay_warmup_calendar_days: 28
+  evaluation_model_trained_as_of_window_start: true
+  deployment_model_refit_as_of_decision_time_after_gate: true
+  common_target_rows_required: true
+  complete_prediction_coverage_required: true
+
+scorecard:
+  forecast_metrics:
+    - overall_wape
+    - overall_mae
+    - weekly_wape_p90
+    - worst_week_wape
+    - demand_tier_wape
+    - zone_mae_p95
+    - mean_bias
+  operational_metrics:
+    - training_jobs
+    - training_seconds
+    - inference_seconds
+    - model_switches
+    - registered_models_evaluated
+    - candidate_evaluation_events
+    - promotion_rejections
+    - degraded_weeks
+    - consecutive_degraded_weeks_max
+  primary_comparison:
+    accuracy: overall_wape
+    reliability: worst_week_wape
+    cost: training_seconds
+    churn: model_switches
+
+interpretation_contract:
+  compare_all_four_strategies_on_identical_targets: true
+  tune_policy_during_locked_replay: false
+  treat_2020_as_stress_regime_not_exclusion: true
+  retain_all_valid_models: true
+
+pre_replay_evidence:
+  automated_tests_passed: 60
+  synthetic_four_strategy_run_complete: true
+  development_feature_months: 36
+  development_feature_rows: 6910851
+  seed_registry_models: 24
+  seed_registry_promotions: 0
+  locked_replay_inspected: false

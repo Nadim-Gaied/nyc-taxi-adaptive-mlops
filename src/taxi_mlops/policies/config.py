@@ -117,3 +117,73 @@ def load_policy_validation_plan(path: str | Path) -> dict[str, object]:
     if len(set(parsed_origins)) != len(parsed_origins):
         raise ValueError("validation origins must be unique")
     return plan
+
+
+def load_locked_replay_plan(path: str | Path) -> dict[str, object]:
+    """Validate the replay protocol without opening the locked data split."""
+
+    plan_path = Path(path)
+    with plan_path.open(encoding="utf-8") as handle:
+        plan = yaml.safe_load(handle)
+    allowed_statuses = {
+        "preregistered_pending_replay_engine_verification",
+        "frozen_ready_for_locked_replay",
+    }
+    if not isinstance(plan, dict) or plan.get("version") != 1:
+        raise ValueError("unsupported locked-replay plan")
+    if plan.get("status") not in allowed_statuses:
+        raise ValueError("locked-replay plan does not have a recognized status")
+
+    access = plan.get("access")
+    clock = plan.get("clock")
+    strategies = plan.get("strategies")
+    challenger = plan.get("challenger_evaluation")
+    interpretation = plan.get("interpretation_contract")
+    sections = (access, clock, strategies, challenger, interpretation)
+    if not all(isinstance(section, dict) for section in sections):
+        raise ValueError("locked-replay plan is missing required sections")
+    if access["history_splits"] != ["development", "policy_validation"]:
+        raise ValueError("replay history may contain only pre-replay splits")
+    if access["replay_split"] != "locked_replay" or access["purpose"] != "replay":
+        raise ValueError("replay targets must use locked_replay with replay access")
+    if bool(access["open_locked_replay_during_engine_development"]):
+        raise ValueError("locked replay cannot open during engine development")
+
+    expected_strategies = {
+        "never_retrain",
+        "fixed_periodic_28d",
+        "performance_triggered",
+        "adaptive_reuse_and_retrain",
+    }
+    if set(strategies) != expected_strategies:
+        raise ValueError("locked replay must compare the four frozen strategies")
+    if not bool(challenger["evaluation_model_trained_as_of_window_start"]):
+        raise ValueError("challenger evaluation would leak its holdout window")
+    if not bool(challenger["deployment_model_refit_as_of_decision_time_after_gate"]):
+        raise ValueError("promoted challengers must be refit at decision time")
+    if int(challenger["minimum_replay_warmup_calendar_days"]) < int(
+        challenger["window_calendar_days"]
+    ):
+        raise ValueError("replay warmup cannot be shorter than the promotion window")
+    if bool(interpretation["tune_policy_during_locked_replay"]):
+        raise ValueError("policy tuning during locked replay is prohibited")
+    if not bool(interpretation["treat_2020_as_stress_regime_not_exclusion"]):
+        raise ValueError("2020 must remain in the locked replay")
+
+    manifest_path = Path(plan["split_manifest"])
+    if not manifest_path.is_absolute():
+        manifest_path = plan_path.parent.parent / manifest_path
+    _, replay_start, replay_end = split_months(manifest_path, "locked_replay")
+    configured_start = pd.Timestamp(clock["start"])
+    configured_end = pd.Timestamp(clock["end"])
+    if configured_start.tzinfo is None or configured_end.tzinfo is None:
+        raise ValueError("replay clock boundaries must include UTC offsets")
+    if configured_start.tz_convert("UTC") != replay_start:
+        raise ValueError("replay clock start differs from the locked split")
+    if configured_end.tz_convert("UTC") != replay_end:
+        raise ValueError("replay clock end differs from the locked split")
+    if int(clock["prediction_cadence_hours"]) != 1:
+        raise ValueError("policy v1 requires hourly predictions")
+    if int(clock["decision_cadence_days"]) <= 0:
+        raise ValueError("decision cadence must be positive")
+    return plan

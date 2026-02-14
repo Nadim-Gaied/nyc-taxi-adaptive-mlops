@@ -15,7 +15,7 @@ from taxi_mlops.analysis import (
     write_regime_figures,
 )
 from taxi_mlops.baselines import daily_weekly_blend_predictions, weekly_seasonal_predictions
-from taxi_mlops.datasets import load_named_split
+from taxi_mlops.datasets import load_named_split, split_months
 from taxi_mlops.evaluation import (
     regression_metrics,
     rolling_baseline_backtest,
@@ -40,9 +40,19 @@ from taxi_mlops.policies import (
     build_alert_scorecard,
     build_promotion_scorecard,
     load_lifecycle_policy,
+    load_locked_replay_plan,
     load_policy_validation_plan,
     run_complete_baseline_validation,
     summarize_policy_validation,
+)
+from taxi_mlops.replay import (
+    ModelRegistry,
+    MonthlyReplayDataSource,
+    ReplayModelStore,
+    build_monthly_feature_store,
+    run_locked_replay,
+    seed_replay_registry,
+    write_locked_replay_report,
 )
 
 
@@ -753,6 +763,136 @@ def _policy_validation_split(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2))
 
 
+def _build_replay_feature_store(args: argparse.Namespace) -> None:
+    report = build_monthly_feature_store(
+        canonical_root=args.canonical_root,
+        feature_root=args.feature_root,
+        start_month=args.start_month,
+        end_month=args.end_month,
+        timezone=args.timezone,
+        force=args.force,
+    )
+    output = Path(args.report)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    report.to_csv(output, index=False)
+    summary = {
+        "start_month": args.start_month,
+        "end_month": args.end_month,
+        "months": int(len(report)),
+        "written": int(report["status"].eq("written").sum()),
+        "skipped_existing": int(report["status"].eq("skipped_existing").sum()),
+        "report": str(output),
+    }
+    print(json.dumps(summary, indent=2))
+
+
+def _seed_replay_registry(args: argparse.Namespace) -> None:
+    plan_path = Path(args.replay_config)
+    plan = load_locked_replay_plan(plan_path)
+    project_root = plan_path.resolve().parent.parent
+
+    def resolve_plan_path(value: object) -> Path:
+        path = Path(str(value))
+        return path if path.is_absolute() else project_root / path
+
+    with resolve_plan_path("configs/development_experiments.yaml").open(
+        encoding="utf-8"
+    ) as handle:
+        development_config = yaml.safe_load(handle)
+    feature_set = development_config["reference"]["feature_set"]
+    feature_groups = development_config["feature_groups"]
+    selected_groups = development_config["feature_sets"][feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+    split_manifest = resolve_plan_path(plan["split_manifest"])
+    _, history_start, _ = split_months(split_manifest, "development")
+    _, replay_start, _ = split_months(split_manifest, "locked_replay")
+    source = MonthlyReplayDataSource(
+        feature_root=args.feature_root,
+        start=history_start,
+        end=replay_start,
+        timezone=plan["timezone"],
+    )
+    manifest_path = Path(args.output_dir) / "registry.json"
+    registry = (
+        ModelRegistry.from_manifest(manifest_path)
+        if manifest_path.is_file()
+        else ModelRegistry()
+    )
+    store = ReplayModelStore(Path(args.output_dir) / "models", registry)
+    initialization = plan["initialization"]
+    report = seed_replay_registry(
+        source=source,
+        model_store=store,
+        origins=initialization["seed_origins"],
+        histories=initialization["seed_histories"],
+        feature_columns=feature_columns,
+        feature_set=feature_set,
+        timezone=plan["timezone"],
+        model_parameters=development_config.get("model_parameters", {}).get(
+            "lightgbm_poisson"
+        ),
+        manifest_path=manifest_path,
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report.to_csv(output_dir / "seed_report.csv", index=False)
+    summary = {
+        "models": len(registry.records()),
+        "trained": int(report["status"].eq("trained").sum()),
+        "resumed": int(report["status"].eq("resumed").sum()),
+        "registry": str(manifest_path),
+    }
+    _write_json(output_dir / "summary.json", summary)
+    print(json.dumps(summary, indent=2))
+
+
+def _run_locked_replay(args: argparse.Namespace) -> None:
+    plan_path = Path(args.replay_config)
+    plan = load_locked_replay_plan(plan_path)
+    project_root = plan_path.resolve().parent.parent
+
+    def resolve_plan_path(value: object) -> Path:
+        path = Path(str(value))
+        return path if path.is_absolute() else project_root / path
+
+    policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
+    with resolve_plan_path("configs/development_experiments.yaml").open(
+        encoding="utf-8"
+    ) as handle:
+        development_config = yaml.safe_load(handle)
+    feature_set = development_config["reference"]["feature_set"]
+    feature_groups = development_config["feature_groups"]
+    selected_groups = development_config["feature_sets"][feature_set]
+    feature_columns = [
+        column for group_name in selected_groups for column in feature_groups[group_name]
+    ]
+    _, history_start, _ = split_months(
+        resolve_plan_path(plan["split_manifest"]), "development"
+    )
+    comparison = run_locked_replay(
+        feature_root=args.feature_root,
+        output_dir=args.output_dir,
+        seed_registry_path=args.seed_registry,
+        plan=plan,
+        policy=policy,
+        history_start=history_start,
+        feature_columns=feature_columns,
+        feature_set=feature_set,
+        model_parameters=development_config.get("model_parameters", {}).get(
+            "lightgbm_poisson"
+        ),
+        resume_completed=args.resume_completed,
+    )
+    print(comparison.to_string(index=False))
+
+
+def _summarize_locked_replay(args: argparse.Namespace) -> None:
+    summary = write_locked_replay_report(args.replay_dir, args.output_dir)
+    print(json.dumps(summary, indent=2))
+
+
 def _analyze_regimes_split(args: argparse.Namespace) -> None:
     data = load_named_split(
         monthly_root=args.monthly_root,
@@ -984,6 +1124,51 @@ def _parser() -> argparse.ArgumentParser:
     policy_validation.add_argument("--validation-config", required=True)
     policy_validation.add_argument("--output-dir", required=True)
     policy_validation.set_defaults(handler=_policy_validation_split)
+
+    replay_features = subparsers.add_parser(
+        "build-replay-feature-store",
+        help="materialize month-partitioned point-in-time replay features",
+    )
+    replay_features.add_argument("--canonical-root", required=True)
+    replay_features.add_argument("--feature-root", required=True)
+    replay_features.add_argument("--start-month", required=True)
+    replay_features.add_argument("--end-month", required=True)
+    replay_features.add_argument("--report", required=True)
+    replay_features.add_argument("--timezone", default="America/New_York")
+    replay_features.add_argument("--force", action="store_true")
+    replay_features.set_defaults(handler=_build_replay_feature_store)
+
+    seed_registry = subparsers.add_parser(
+        "seed-replay-registry",
+        help="reconstruct the fixed pre-replay model pool without locked data",
+    )
+    seed_registry.add_argument("--feature-root", required=True)
+    seed_registry.add_argument("--replay-config", required=True)
+    seed_registry.add_argument("--output-dir", required=True)
+    seed_registry.set_defaults(handler=_seed_replay_registry)
+
+    locked_replay = subparsers.add_parser(
+        "run-locked-replay",
+        help="execute the frozen four-strategy replay after all preflight gates pass",
+    )
+    locked_replay.add_argument("--feature-root", required=True)
+    locked_replay.add_argument("--replay-config", required=True)
+    locked_replay.add_argument("--seed-registry", required=True)
+    locked_replay.add_argument("--output-dir", required=True)
+    locked_replay.add_argument(
+        "--resume-completed",
+        action="store_true",
+        help="reuse strategies that already have a complete artifact set",
+    )
+    locked_replay.set_defaults(handler=_run_locked_replay)
+
+    replay_report = subparsers.add_parser(
+        "summarize-locked-replay",
+        help="produce tables and figures from a completed locked replay",
+    )
+    replay_report.add_argument("--replay-dir", required=True)
+    replay_report.add_argument("--output-dir")
+    replay_report.set_defaults(handler=_summarize_locked_replay)
 
     regimes = subparsers.add_parser(
         "analyze-regimes-split",

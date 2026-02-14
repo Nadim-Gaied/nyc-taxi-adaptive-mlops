@@ -1,0 +1,26 @@
+{
+  "status": "complete",
+  "strategies": [
+    "fixed_periodic_28d",
+    "performance_triggered",
+    "adaptive_reuse_and_retrain",
+    "never_retrain"
+  ],
+  "observations_per_strategy": 13834326,
+  "best_overall_wape_strategy": "fixed_periodic_28d",
+  "best_overall_wape": 0.1685572349816022,
+  "best_relative_wape_improvement_vs_never_percent": 3.0306449782178615,
+  "fixed_training_jobs": 79,
+  "fixed_model_switches": 78,
+  "fixed_degraded_weeks": 277,
+  "never_degraded_weeks": 294,
+  "adaptive_registered_models_evaluated": 18754,
+  "adaptive_wape_delta_vs_fixed_percentage_points": 0.3786087817419015,
+  "figures": [
+    "docs\\assets\\locked_replay\\figures\\weekly_wape.png",
+    "docs\\assets\\locked_replay\\figures\\annual_wape.png",
+    "docs\\assets\\locked_replay\\figures\\accuracy_vs_compute.png",
+    "docs\\assets\\locked_replay\\figures\\operational_counts.png",
+    "docs\\assets\\locked_replay\\figures\\tier_wape.png"
+  ]
+}
