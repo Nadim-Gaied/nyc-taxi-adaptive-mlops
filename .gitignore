@@ -14,6 +14,9 @@ data/raw/*
 data/interim/*
 data/processed/*
 data/reports/*
+data/mlflow/
+data/production/
+mlruns/
 !data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep

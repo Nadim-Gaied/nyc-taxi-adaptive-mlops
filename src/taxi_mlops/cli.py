@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -45,6 +46,13 @@ from taxi_mlops.policies import (
     run_complete_baseline_validation,
     summarize_policy_validation,
 )
+from taxi_mlops.production import (
+    HourlyPredictionPipeline,
+    HourlyScoringPipeline,
+    MLflowLightGBMResolver,
+    ProductionStateStore,
+    load_production_config,
+)
 from taxi_mlops.replay import (
     ModelRegistry,
     MonthlyReplayDataSource,
@@ -54,6 +62,7 @@ from taxi_mlops.replay import (
     seed_replay_registry,
     write_locked_replay_report,
 )
+from taxi_mlops.tracking import import_locked_replay_to_mlflow
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
@@ -893,6 +902,80 @@ def _summarize_locked_replay(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2))
 
 
+def _import_locked_replay_mlflow(args: argparse.Namespace) -> None:
+    result = import_locked_replay_to_mlflow(
+        replay_dir=args.replay_dir,
+        tracking_uri=args.tracking_uri,
+        experiment_name=args.experiment_name,
+        archive_ref=args.archive_ref,
+        project_root=args.project_root,
+        registered_model_name=args.registered_model_name,
+        artifact_root=args.artifact_root,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _predict_production_hour(args: argparse.Namespace) -> None:
+    state = ProductionStateStore(args.state_db)
+    resolver = MLflowLightGBMResolver(
+        tracking_uri=args.tracking_uri,
+        model_name=args.model_name,
+        alias=args.model_alias,
+    )
+    pipeline = HourlyPredictionPipeline(
+        feature_root=args.feature_root,
+        output_root=args.output_root,
+        state_store=state,
+        model_resolver=resolver,
+        timezone=args.timezone,
+        expected_zones=args.expected_zones,
+    )
+    print(json.dumps(asdict(pipeline.run(args.target_hour)), indent=2))
+
+
+def _score_production_hour(args: argparse.Namespace) -> None:
+    state = ProductionStateStore(args.state_db)
+    pipeline = HourlyScoringPipeline(
+        feature_root=args.feature_root,
+        output_root=args.output_root,
+        state_store=state,
+        timezone=args.timezone,
+    )
+    print(json.dumps(asdict(pipeline.run(args.target_hour, as_of=args.as_of)), indent=2))
+
+
+def _run_production_hour(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    resolver = MLflowLightGBMResolver(
+        tracking_uri=config.tracking.uri,
+        model_name=config.tracking.registered_model_name,
+        alias=config.tracking.production_alias,
+    )
+    prediction_pipeline = HourlyPredictionPipeline(
+        feature_root=config.storage.feature_root,
+        output_root=config.storage.prediction_root,
+        state_store=state,
+        model_resolver=resolver,
+        timezone=config.timezone,
+        expected_zones=config.expected_zones,
+    )
+    result: dict[str, object] = {
+        "prediction": asdict(prediction_pipeline.run(args.target_hour))
+    }
+    if args.score_as_of:
+        scoring_pipeline = HourlyScoringPipeline(
+            feature_root=config.storage.feature_root,
+            output_root=config.storage.score_root,
+            state_store=state,
+            timezone=config.timezone,
+        )
+        result["score"] = asdict(
+            scoring_pipeline.run(args.target_hour, as_of=args.score_as_of)
+        )
+    print(json.dumps(result, indent=2))
+
+
 def _analyze_regimes_split(args: argparse.Namespace) -> None:
     data = load_named_split(
         monthly_root=args.monthly_root,
@@ -1169,6 +1252,56 @@ def _parser() -> argparse.ArgumentParser:
     replay_report.add_argument("--replay-dir", required=True)
     replay_report.add_argument("--output-dir")
     replay_report.set_defaults(handler=_summarize_locked_replay)
+
+    replay_import = subparsers.add_parser(
+        "import-locked-replay-mlflow",
+        help="import the frozen replay into MLflow with explicit historical provenance",
+    )
+    replay_import.add_argument("--replay-dir", required=True)
+    replay_import.add_argument("--tracking-uri", required=True)
+    replay_import.add_argument("--experiment-name", default="nyc-taxi-locked-replay")
+    replay_import.add_argument("--archive-ref", default="experiment-v1.0.0")
+    replay_import.add_argument("--project-root", default=".")
+    replay_import.add_argument("--registered-model-name", default="nyc-taxi-demand")
+    replay_import.add_argument("--artifact-root")
+    replay_import.set_defaults(handler=_import_locked_replay_mlflow)
+
+    predict_hour = subparsers.add_parser(
+        "predict-production-hour",
+        help="generate one idempotent hourly batch with model and feature lineage",
+    )
+    predict_hour.add_argument("--feature-root", required=True)
+    predict_hour.add_argument("--output-root", required=True)
+    predict_hour.add_argument("--state-db", required=True)
+    predict_hour.add_argument("--tracking-uri", required=True)
+    predict_hour.add_argument("--model-name", default="nyc-taxi-demand")
+    predict_hour.add_argument("--model-alias", default="accuracy-reference")
+    predict_hour.add_argument("--target-hour", required=True)
+    predict_hour.add_argument("--timezone", default="America/New_York")
+    predict_hour.add_argument("--expected-zones", type=int, default=263)
+    predict_hour.set_defaults(handler=_predict_production_hour)
+
+    score_hour = subparsers.add_parser(
+        "score-production-hour",
+        help="join one persisted prediction batch to newly available labels",
+    )
+    score_hour.add_argument("--feature-root", required=True)
+    score_hour.add_argument("--output-root", required=True)
+    score_hour.add_argument("--state-db", required=True)
+    score_hour.add_argument("--target-hour", required=True)
+    score_hour.add_argument("--as-of", required=True)
+    score_hour.add_argument("--timezone", default="America/New_York")
+    score_hour.set_defaults(handler=_score_production_hour)
+
+    production_hour = subparsers.add_parser(
+        "run-production-hour",
+        help="run the configured idempotent prediction and optional scoring path",
+    )
+    production_hour.add_argument("--config", default="configs/production.yaml")
+    production_hour.add_argument("--project-root", default=".")
+    production_hour.add_argument("--target-hour", required=True)
+    production_hour.add_argument("--score-as-of")
+    production_hour.set_defaults(handler=_run_production_hour)
 
     regimes = subparsers.add_parser(
         "analyze-regimes-split",

@@ -1,0 +1,29 @@
+version: 1
+timezone: America/New_York
+expected_zones: 263
+
+tracking:
+  uri: sqlite:///data/mlflow/mlflow.db
+  artifact_root: data/mlflow/artifacts
+  experiment_name: nyc-taxi-production
+  registered_model_name: nyc-taxi-demand
+  production_alias: accuracy-reference
+
+storage:
+  feature_root: data/processed/features_monthly
+  prediction_root: data/production/predictions
+  score_root: data/production/scores
+  state_db: data/production/production.db
+
+lifecycle:
+  strategy: fixed_periodic_28d
+  training_history: recent_365d
+  retrain_every_calendar_days: 28
+  statistical_promotion_gate: false
+  technical_validation_required: true
+
+monitoring:
+  weekly_wape_warning: 0.142059
+  weekly_wape_severe: 0.159875
+  reporting_timezone: America/New_York
+  drift_can_trigger_retraining_alone: false
