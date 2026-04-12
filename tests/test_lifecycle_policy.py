@@ -21,9 +21,7 @@ def test_frozen_lifecycle_policy_has_safe_access_and_promotion_gates() -> None:
 
 def test_final_lifecycle_policy_records_validation_and_keeps_replay_closed() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    policy = load_lifecycle_policy(
-        project_root / "configs/lifecycle_policy_final_v1.yaml"
-    )
+    policy = load_lifecycle_policy(project_root / "configs/lifecycle_policy_final_v1.yaml")
 
     assert policy["status"] == "replay_frozen_after_policy_validation"
     assert policy["access_policy"]["policy_validation_complete"] is True

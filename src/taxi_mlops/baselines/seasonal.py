@@ -32,9 +32,7 @@ def weekly_seasonal_predictions(
             ordered["pickup_hour"].dt.tz_convert(timezone).dt.tz_localize(None)
         )
         history = ordered[["_wall_clock_hour", "pickup_zone_id", "pickup_count"]].copy()
-        history["_wall_clock_hour"] = history["_wall_clock_hour"] + pd.Timedelta(
-            hours=lag_hours
-        )
+        history["_wall_clock_hour"] = history["_wall_clock_hour"] + pd.Timedelta(hours=lag_hours)
         history = history.rename(columns={"pickup_count": "prediction"})
         predictions = ordered.merge(
             history,
@@ -98,9 +96,9 @@ def complete_daily_weekly_blend_predictions(
     if not 0.0 <= daily_weight <= 1.0:
         raise ValueError("daily_weight must be between zero and one")
 
-    daily = weekly_seasonal_predictions(
-        data, lag_hours=24, timezone=timezone
-    ).rename(columns={"prediction": "daily_prediction"})
+    daily = weekly_seasonal_predictions(data, lag_hours=24, timezone=timezone).rename(
+        columns={"prediction": "daily_prediction"}
+    )
     weekly = weekly_seasonal_predictions(data, lag_hours=168, timezone=timezone)[
         ["pickup_hour", "pickup_zone_id", "prediction"]
     ].rename(columns={"prediction": "weekly_prediction"})
@@ -118,14 +116,13 @@ def complete_daily_weekly_blend_predictions(
         how="left",
         validate="1:1",
     )
-    both_available = predictions["daily_prediction"].notna() & predictions[
-        "weekly_prediction"
-    ].notna()
+    both_available = (
+        predictions["daily_prediction"].notna() & predictions["weekly_prediction"].notna()
+    )
     predictions["prediction"] = float("nan")
     predictions.loc[both_available, "prediction"] = (
         daily_weight * predictions.loc[both_available, "daily_prediction"]
-        + (1.0 - daily_weight)
-        * predictions.loc[both_available, "weekly_prediction"]
+        + (1.0 - daily_weight) * predictions.loc[both_available, "weekly_prediction"]
     )
     predictions["prediction"] = (
         predictions["prediction"]

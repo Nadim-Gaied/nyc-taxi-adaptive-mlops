@@ -43,9 +43,9 @@ def _history_intervals(
         return [(data_start, cutoff)]
     if strategy == "recent_90d_plus_seasonal_90d":
         seasonal_start = (local_cutoff - pd.DateOffset(years=1)).tz_convert("UTC")
-        seasonal_end = (
-            seasonal_start.tz_convert(timezone) + pd.DateOffset(days=90)
-        ).tz_convert("UTC")
+        seasonal_end = (seasonal_start.tz_convert(timezone) + pd.DateOffset(days=90)).tz_convert(
+            "UTC"
+        )
         recent_start = (local_cutoff - pd.DateOffset(days=90)).tz_convert("UTC")
         return [(seasonal_start, seasonal_end), (recent_start, cutoff)]
     if strategy.startswith("recent_") and strategy.endswith("d"):
@@ -53,9 +53,7 @@ def _history_intervals(
         start = (local_cutoff - pd.DateOffset(days=days)).tz_convert("UTC")
         return [(start, cutoff)]
     seasonal_start = (local_cutoff - pd.DateOffset(years=1)).tz_convert("UTC")
-    seasonal_end = (
-        seasonal_start.tz_convert(timezone) + pd.DateOffset(days=90)
-    ).tz_convert("UTC")
+    seasonal_end = (seasonal_start.tz_convert(timezone) + pd.DateOffset(days=90)).tz_convert("UTC")
     if strategy == "seasonal_90d_1y_gap":
         return [(seasonal_start, seasonal_end)]
     raise ValueError(f"unsupported training history: {strategy}")
@@ -78,18 +76,14 @@ def _seven_day_metrics(
 ) -> pd.DataFrame:
     local_dates = predictions["pickup_hour"].dt.tz_convert(timezone).dt.tz_localize(None)
     cutoff_local = cutoff.tz_convert(timezone).tz_localize(None)
-    block = ((local_dates.dt.normalize() - cutoff_local.normalize()).dt.days // 7).astype(
-        "int8"
-    )
+    block = ((local_dates.dt.normalize() - cutoff_local.normalize()).dt.days // 7).astype("int8")
     rows: list[dict[str, object]] = []
     for block_index, frame in predictions.groupby(block, sort=True):
         metrics = regression_metrics(frame)
         rows.append(
             {
                 "week_index": int(block_index) + 1,
-                "week_start": str(
-                    (cutoff_local + pd.DateOffset(days=int(block_index) * 7)).date()
-                ),
+                "week_start": str((cutoff_local + pd.DateOffset(days=int(block_index) * 7)).date()),
                 **metrics,
             }
         )
@@ -163,18 +157,14 @@ def run_training_history_experiment(
             cutoff.tz_convert(timezone) + pd.DateOffset(days=evaluation_days)
         ).tz_convert("UTC")
         evaluation = data.loc[
-            data["pickup_hour"].ge(cutoff)
-            & data["pickup_hour"].lt(evaluation_end)
+            data["pickup_hour"].ge(cutoff) & data["pickup_hour"].lt(evaluation_end)
         ].copy()
-        canonical_targets = evaluation[
-            ["pickup_hour", "pickup_zone_id", "pickup_count"]
-        ]
-        tier_reference_start = (
-            cutoff.tz_convert(timezone) - pd.DateOffset(days=365)
-        ).tz_convert("UTC")
+        canonical_targets = evaluation[["pickup_hour", "pickup_zone_id", "pickup_count"]]
+        tier_reference_start = (cutoff.tz_convert(timezone) - pd.DateOffset(days=365)).tz_convert(
+            "UTC"
+        )
         tier_reference = data.loc[
-            data["pickup_hour"].ge(tier_reference_start)
-            & data["pickup_hour"].lt(cutoff)
+            data["pickup_hour"].ge(tier_reference_start) & data["pickup_hour"].lt(cutoff)
         ]
         tiers = assign_demand_tiers(
             tier_reference,
@@ -217,9 +207,7 @@ def run_training_history_experiment(
             train = _select_intervals(data, intervals)
             if train.empty:
                 raise ValueError(f"no training rows for {strategy} at {cutoff}")
-            x_train, y_train, x_evaluation = _model_matrices(
-                train, evaluation, columns
-            )
+            x_train, y_train, x_evaluation = _model_matrices(train, evaluation, columns)
             model = lgb.LGBMRegressor(**parameters)
             started = perf_counter()
             model.fit(x_train, y_train, categorical_feature=["pickup_zone_id"])
@@ -249,9 +237,7 @@ def run_training_history_experiment(
             tier_metrics = tier_regression_metrics(predictions, tiers)
             tier_metrics["cutoff"] = str(cutoff)
             tier_metrics["training_history"] = strategy
-            weekly_metrics = _seven_day_metrics(
-                predictions, cutoff=cutoff, timezone=timezone
-            )
+            weekly_metrics = _seven_day_metrics(predictions, cutoff=cutoff, timezone=timezone)
             weekly_metrics["cutoff"] = str(cutoff)
             weekly_metrics["training_history"] = strategy
             result_rows.append(result)
@@ -269,9 +255,7 @@ def run_training_history_experiment(
                 weekly_metrics.to_csv(weekly_checkpoint, index=False)
             print(f"Completed {strategy} at {cutoff}", flush=True)
 
-    results = pd.DataFrame(result_rows).sort_values(
-        ["cutoff", "wape", "training_history"]
-    )
+    results = pd.DataFrame(result_rows).sort_values(["cutoff", "wape", "training_history"])
     tiers = pd.concat(tier_frames, ignore_index=True).sort_values(
         ["cutoff", "training_history", "demand_tier"]
     )

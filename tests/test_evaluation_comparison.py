@@ -13,9 +13,7 @@ from taxi_mlops.evaluation import (
 def _prediction_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "pickup_hour": pd.to_datetime(
-                ["2019-01-01T00:00:00Z", "2019-01-01T00:00:00Z"]
-            ),
+            "pickup_hour": pd.to_datetime(["2019-01-01T00:00:00Z", "2019-01-01T00:00:00Z"]),
             "pickup_zone_id": [1, 2],
             "pickup_count": [10, 5],
             "prediction": [9, 7],
@@ -68,9 +66,7 @@ def test_tier_metrics_use_fixed_training_assignments() -> None:
             "prediction": [12, 18, 3, 2],
         }
     )
-    tiers = pd.DataFrame(
-        {"pickup_zone_id": [1, 2], "demand_tier": ["high", "low"]}
-    )
+    tiers = pd.DataFrame({"pickup_zone_id": [1, 2], "demand_tier": ["high", "low"]})
 
     metrics = tier_regression_metrics(predictions, tiers).set_index("demand_tier")
 

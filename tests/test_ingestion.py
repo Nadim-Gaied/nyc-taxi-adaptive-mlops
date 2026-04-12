@@ -55,9 +55,7 @@ def test_fails_instead_of_filling_an_entire_missing_source_hour() -> None:
 
 
 def test_requires_offset_aware_boundaries() -> None:
-    trips = pd.DataFrame(
-        {"tpep_pickup_datetime": ["2019-01-01 00:10:00"], "PULocationID": [1]}
-    )
+    trips = pd.DataFrame({"tpep_pickup_datetime": ["2019-01-01 00:10:00"], "PULocationID": [1]})
     zones = pd.DataFrame({"LocationID": [1]})
 
     with pytest.raises(DataContractError, match="explicit UTC offset"):

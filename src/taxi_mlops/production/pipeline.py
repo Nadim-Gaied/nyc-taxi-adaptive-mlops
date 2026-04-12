@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 import pandas as pd
@@ -62,6 +63,7 @@ class HourlyPredictionPipeline:
         self.expected_zones = expected_zones
 
     def run(self, target_hour: str | pd.Timestamp) -> PredictionBatch:
+        started_at = perf_counter()
         target = canonical_utc(target_hour, "target_hour")
         target_text = target.isoformat()
         existing = self.state.prediction_for_hour(target_text)
@@ -93,7 +95,9 @@ class HourlyPredictionPipeline:
             )
             feature_fingerprint = dataframe_fingerprint(features, fingerprint_columns)
             output = features[["pickup_hour", "pickup_zone_id"]].copy()
+            inference_started_at = perf_counter()
             output["prediction"] = model.predict(features)
+            inference_seconds = perf_counter() - inference_started_at
             output = validate_predictions(output, expected_keys=features)
             identity = "|".join([target_text, model.name, model.version, feature_fingerprint])
             batch_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -127,13 +131,28 @@ class HourlyPredictionPipeline:
             )
             self.state.record_prediction(batch)
             self.state.update_watermark("predict", target_text, feature_fingerprint)
-            self.state.record_event("predict", "completed", batch_id=batch_id)
+            self.state.record_event(
+                "predict",
+                "completed",
+                batch_id=batch_id,
+                details={
+                    "target_hour": target_text,
+                    "row_count": len(output),
+                    "model_version": model.version,
+                    "inference_seconds": inference_seconds,
+                    "pipeline_seconds": perf_counter() - started_at,
+                },
+            )
             return batch
         except Exception as error:
             self.state.record_event(
                 "predict",
                 "failed",
-                details={"target_hour": target_text, "error": repr(error)},
+                details={
+                    "target_hour": target_text,
+                    "error": repr(error),
+                    "pipeline_seconds": perf_counter() - started_at,
+                },
             )
             raise
 
@@ -158,6 +177,7 @@ class HourlyScoringPipeline:
         *,
         as_of: str | pd.Timestamp,
     ) -> ScoreRecord:
+        started_at = perf_counter()
         target = canonical_utc(target_hour, "target_hour")
         cutoff = canonical_utc(as_of, "as_of")
         target_text = target.isoformat()
@@ -215,10 +235,26 @@ class HourlyScoringPipeline:
             )
             self.state.record_score(score)
             self.state.update_watermark("score", target_text, batch.feature_fingerprint)
-            self.state.record_event("score", "completed", batch_id=batch.batch_id)
+            self.state.record_event(
+                "score",
+                "completed",
+                batch_id=batch.batch_id,
+                details={
+                    "target_hour": target_text,
+                    "observations": score.observations,
+                    "pipeline_seconds": perf_counter() - started_at,
+                },
+            )
             return score
         except Exception as error:
             self.state.record_event(
-                "score", "failed", batch_id=batch.batch_id, details={"error": repr(error)}
+                "score",
+                "failed",
+                batch_id=batch.batch_id,
+                details={
+                    "target_hour": target_text,
+                    "error": repr(error),
+                    "pipeline_seconds": perf_counter() - started_at,
+                },
             )
             raise

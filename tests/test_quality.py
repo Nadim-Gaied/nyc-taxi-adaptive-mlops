@@ -32,9 +32,7 @@ def test_quality_summary_combines_reports_and_metrics(tmp_path) -> None:
     _write_report(tmp_path, "2019-01")
     _write_report(tmp_path, "2019-02")
 
-    table, summary = summarize_quality_reports(
-        tmp_path, start_month="2019-01", end_month="2019-02"
-    )
+    table, summary = summarize_quality_reports(tmp_path, start_month="2019-01", end_month="2019-02")
 
     assert table["quality_pass"].all()
     assert summary["all_quality_gates_pass"] is True
@@ -52,9 +50,7 @@ def test_quality_summary_refuses_missing_reports_when_complete_required(tmp_path
 def test_quality_summary_flags_missing_source_hours(tmp_path) -> None:
     _write_report(tmp_path, "2019-01", missing_hours=["2019-01-02 05:00:00+00:00"])
 
-    table, summary = summarize_quality_reports(
-        tmp_path, start_month="2019-01", end_month="2019-01"
-    )
+    table, summary = summarize_quality_reports(tmp_path, start_month="2019-01", end_month="2019-01")
 
     assert table.loc[0, "quality_pass"] == False  # noqa: E712
     assert summary["failed_quality_months"] == ["2019-01"]

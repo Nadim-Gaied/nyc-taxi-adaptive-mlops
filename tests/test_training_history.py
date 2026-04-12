@@ -7,17 +7,13 @@ from taxi_mlops.models import run_training_history_experiment
 
 
 def test_training_history_uses_common_targets_and_fixed_week_blocks(tmp_path) -> None:
-    hours = pd.date_range(
-        "2019-01-01", "2020-02-01", freq="h", inclusive="left", tz="UTC"
-    )
+    hours = pd.date_range("2019-01-01", "2020-02-01", freq="h", inclusive="left", tz="UTC")
     data = pd.DataFrame(
         {
             "pickup_hour": list(hours) * 2,
             "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
             "pickup_count": [
-                zone * 5 + index % 24 + index % 7
-                for zone in (1, 2)
-                for index in range(len(hours))
+                zone * 5 + index % 24 + index % 7 for zone in (1, 2) for index in range(len(hours))
             ],
         }
     )

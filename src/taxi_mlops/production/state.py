@@ -39,6 +39,19 @@ class ScoreRecord:
     prediction_coverage: float
 
 
+@dataclass(frozen=True)
+class ModelDeployment:
+    model_name: str
+    model_version: str
+    model_alias: str
+    model_run_id: str
+    deployed_at: str
+    training_start: str
+    training_end: str
+    data_fingerprint: str
+    reason: str
+
+
 class ProductionStateStore:
     """Durable control-plane metadata; bulk predictions remain in Parquet."""
 
@@ -99,6 +112,20 @@ class ProductionStateStore:
                     value TEXT NOT NULL,
                     input_fingerprint TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS model_deployments (
+                    deployment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_name TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    model_alias TEXT NOT NULL,
+                    model_run_id TEXT NOT NULL,
+                    deployed_at TEXT NOT NULL,
+                    training_start TEXT NOT NULL,
+                    training_end TEXT NOT NULL,
+                    data_fingerprint TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(model_name, model_version, model_alias)
                 );
                 """
             )
@@ -196,3 +223,118 @@ class ProductionStateStore:
                 """,
                 (stage, value, input_fingerprint),
             )
+
+    def latest_deployment(self, model_alias: str) -> ModelDeployment | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT model_name, model_version, model_alias, model_run_id,
+                       deployed_at, training_start, training_end,
+                       data_fingerprint, reason
+                FROM model_deployments
+                WHERE model_alias = ?
+                ORDER BY deployed_at DESC, deployment_id DESC
+                LIMIT 1
+                """,
+                (model_alias,),
+            ).fetchone()
+        return None if row is None else ModelDeployment(**dict(row))
+
+    def record_deployment(self, deployment: ModelDeployment) -> ModelDeployment:
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT model_name, model_version, model_alias, model_run_id,
+                       deployed_at, training_start, training_end,
+                       data_fingerprint, reason
+                FROM model_deployments
+                WHERE model_name = ? AND model_version = ? AND model_alias = ?
+                """,
+                (
+                    deployment.model_name,
+                    deployment.model_version,
+                    deployment.model_alias,
+                ),
+            ).fetchone()
+            if existing is not None:
+                current = ModelDeployment(**dict(existing))
+                if current != deployment:
+                    raise ValueError("registered deployment has conflicting lineage")
+                return current
+            connection.execute(
+                """
+                INSERT INTO model_deployments(
+                    model_name, model_version, model_alias, model_run_id,
+                    deployed_at, training_start, training_end,
+                    data_fingerprint, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(asdict(deployment).values()),
+            )
+        return deployment
+
+    def score_history(self) -> list[dict[str, Any]]:
+        """Return scored batches with their immutable prediction lineage."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    p.batch_id, p.target_hour, p.generated_at,
+                    p.model_name, p.model_version, p.model_alias, p.model_run_id,
+                    p.feature_fingerprint, p.row_count,
+                    s.scored_at, s.scored_path, s.observations,
+                    s.actual_pickups, s.predicted_pickups, s.mae, s.wape,
+                    s.mean_bias, s.prediction_coverage
+                FROM prediction_batches AS p
+                INNER JOIN scores AS s USING (batch_id)
+                ORDER BY p.target_hour, p.batch_id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def event_history(self) -> list[dict[str, Any]]:
+        """Return the append-only pipeline audit trail with decoded details."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, occurred_at, stage, status, batch_id, details_json
+                FROM pipeline_events
+                ORDER BY event_id
+                """
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            event["details"] = json.loads(event.pop("details_json"))
+            events.append(event)
+        return events
+
+    def deployment_history(self) -> list[dict[str, Any]]:
+        """Return model deployment history in control-plane order."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT deployment_id, model_name, model_version, model_alias,
+                       model_run_id, deployed_at, training_start, training_end,
+                       data_fingerprint, reason
+                FROM model_deployments
+                ORDER BY deployed_at, deployment_id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def watermark_history(self) -> list[dict[str, Any]]:
+        """Return current stage checkpoints for operational monitoring."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT stage, value, input_fingerprint, updated_at
+                FROM watermarks
+                ORDER BY stage
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]

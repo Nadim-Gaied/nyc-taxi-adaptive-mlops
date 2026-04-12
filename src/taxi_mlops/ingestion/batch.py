@@ -110,4 +110,3 @@ def process_month_range(
         "skipped_existing_months": skipped_existing,
         "processed": processed,
     }
-

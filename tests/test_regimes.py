@@ -21,9 +21,7 @@ def _canonical_two_months() -> pd.DataFrame:
 
 
 def test_monthly_regime_analysis_normalizes_profiles() -> None:
-    monthly, profiles, similarity = analyze_monthly_regimes(
-        _canonical_two_months(), timezone="UTC"
-    )
+    monthly, profiles, similarity = analyze_monthly_regimes(_canonical_two_months(), timezone="UTC")
 
     assert monthly["month"].tolist() == ["2019-01", "2019-02"]
     assert profiles.groupby("month")["normalized_demand"].mean().round(10).eq(1.0).all()
@@ -31,9 +29,7 @@ def test_monthly_regime_analysis_normalizes_profiles() -> None:
 
 
 def test_regime_figures_are_written(tmp_path) -> None:
-    monthly, profiles, similarity = analyze_monthly_regimes(
-        _canonical_two_months(), timezone="UTC"
-    )
+    monthly, profiles, similarity = analyze_monthly_regimes(_canonical_two_months(), timezone="UTC")
     zone_summary = pd.DataFrame(
         {
             "volume_rank": [1, 2],

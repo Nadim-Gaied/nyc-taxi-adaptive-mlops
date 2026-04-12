@@ -122,4 +122,3 @@ def characterize_dataset(
         },
     }
     return summary, hour_of_week, zone_summary
-

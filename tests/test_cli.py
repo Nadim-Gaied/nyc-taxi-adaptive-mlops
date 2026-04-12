@@ -53,4 +53,3 @@ def test_cli_builds_parquet_and_quality_report(tmp_path, monkeypatch) -> None:
     assert output["pickup_count"].sum() == 2
     assert report["expected_hours"] == 2
     assert report["missing_source_hours"] == []
-

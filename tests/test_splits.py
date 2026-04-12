@@ -68,4 +68,3 @@ def test_loader_requires_every_month_in_split(tmp_path) -> None:
             split_name="development",
             purpose="eda",
         )
-

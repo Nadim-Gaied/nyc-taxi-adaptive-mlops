@@ -57,14 +57,14 @@ def build_feature_table(
     grouped = features.groupby("pickup_zone_id", sort=False)["pickup_count"]
     for window in rolling_windows:
         features[f"rolling_mean_{window}h"] = grouped.transform(
-            lambda values, _window=window: values.shift(1)
-            .rolling(_window, min_periods=_window)
-            .mean()
+            lambda values, _window=window: (
+                values.shift(1).rolling(_window, min_periods=_window).mean()
+            )
         )
         features[f"rolling_std_{window}h"] = grouped.transform(
-            lambda values, _window=window: values.shift(1)
-            .rolling(_window, min_periods=_window)
-            .std()
+            lambda values, _window=window: (
+                values.shift(1).rolling(_window, min_periods=_window).std()
+            )
         )
 
     return features.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(drop=True)

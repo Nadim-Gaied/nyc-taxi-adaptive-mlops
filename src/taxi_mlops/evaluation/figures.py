@@ -12,9 +12,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 
-def write_baseline_backtest_figures(
-    weekly: pd.DataFrame, output_dir: str | Path
-) -> list[Path]:
+def write_baseline_backtest_figures(weekly: pd.DataFrame, output_dir: str | Path) -> list[Path]:
     """Plot time-varying baseline error and zone-tail amplification."""
 
     output_dir = Path(output_dir)
@@ -71,9 +69,7 @@ def write_baseline_backtest_figures(
     return written
 
 
-def write_window_experiment_figures(
-    results: pd.DataFrame, output_dir: str | Path
-) -> list[Path]:
+def write_window_experiment_figures(results: pd.DataFrame, output_dir: str | Path) -> list[Path]:
     """Plot accuracy stability and compute trade-offs across history windows."""
 
     output_dir = Path(output_dir)

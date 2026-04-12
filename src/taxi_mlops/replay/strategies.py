@@ -78,9 +78,7 @@ class ModelLifecycleStrategy:
         history = context.source.observations_as_of(
             as_of, start=min(start for start, _ in intervals)
         )
-        model_id = (
-            f"{self.name}__{purpose}__{history_strategy}__{_timestamp_id(as_of)}"
-        )
+        model_id = f"{self.name}__{purpose}__{history_strategy}__{_timestamp_id(as_of)}"
         outcome = self.model_store.train(
             history,
             model_id=model_id,
@@ -149,12 +147,8 @@ class ModelLifecycleStrategy:
     def initialize(self, context: ReplayContext) -> None:
         if self.model_store.registry is not context.registry:
             raise ValueError("model store and replay context must share one registry")
-        tier_start = shift_local_calendar_days(
-            context.now, days=-365, timezone=self.timezone
-        )
-        tier_reference = context.source.observations_as_of(
-            context.now, start=tier_start
-        )
+        tier_start = shift_local_calendar_days(context.now, days=-365, timezone=self.timezone)
+        tier_reference = context.source.observations_as_of(context.now, start=tier_start)
         tiers = assign_demand_tiers(tier_reference)
         self.metrics = ReplayMetricsAccumulator(
             replay_start=context.now,
@@ -167,44 +161,29 @@ class ModelLifecycleStrategy:
             history_strategy=self.initial_history,
             purpose="initial",
         )
-        self._promote(
-            context, model_id, reason="initial deployment", cooldown_weeks=0
-        )
+        self._promote(context, model_id, reason="initial deployment", cooldown_weeks=0)
 
     def observe(self, context: ReplayContext, scored: pd.DataFrame) -> None:
         if self.metrics is None:
             raise RuntimeError("strategy metrics were not initialized")
         self.metrics.update(scored)
         self._recent_scores.append(scored.copy())
-        keep_after = shift_local_calendar_days(
-            context.now, days=-35, timezone=self.timezone
-        )
-        while (
-            self._recent_scores
-            and self._recent_scores[0]["pickup_hour"].max() < keep_after
-        ):
+        keep_after = shift_local_calendar_days(context.now, days=-35, timezone=self.timezone)
+        while self._recent_scores and self._recent_scores[0]["pickup_hour"].max() < keep_after:
             self._recent_scores.popleft()
 
-    def predict(
-        self, context: ReplayContext, features: pd.DataFrame
-    ) -> pd.DataFrame:
+    def predict(self, context: ReplayContext, features: pd.DataFrame) -> pd.DataFrame:
         if self.active_model_id is None:
             raise RuntimeError("strategy has no active model")
-        prediction, seconds = self.model_store.predict(
-            self.active_model_id, features
-        )
+        prediction, seconds = self.model_store.predict(self.active_model_id, features)
         self.inference_seconds += seconds
         output = features[["pickup_hour", "pickup_zone_id"]].copy()
         output["prediction"] = prediction.to_numpy()
         output["model_id"] = self.active_model_id
         return output
 
-    def _scored_window(
-        self, context: ReplayContext, *, days: int
-    ) -> pd.DataFrame | None:
-        start = shift_local_calendar_days(
-            context.now, days=-days, timezone=self.timezone
-        )
+    def _scored_window(self, context: ReplayContext, *, days: int) -> pd.DataFrame | None:
+        start = shift_local_calendar_days(context.now, days=-days, timezone=self.timezone)
         frames = [
             frame.loc[frame["pickup_hour"].ge(start)]
             for frame in self._recent_scores
@@ -247,9 +226,7 @@ class ModelLifecycleStrategy:
         model_id: str,
         evaluation_start: pd.Timestamp,
     ) -> pd.DataFrame:
-        target = context.source.observations_as_of(
-            context.now, start=evaluation_start
-        )
+        target = context.source.observations_as_of(context.now, start=evaluation_start)
         keys = ["pickup_hour", "pickup_zone_id"]
         cached = self._candidate_prediction_cache.get(model_id)
         if cached is None:
@@ -343,12 +320,8 @@ class ModelLifecycleStrategy:
         current: pd.DataFrame,
         evaluation_start: pd.Timestamp,
     ) -> tuple[PromotionReference, pd.DataFrame]:
-        tier_start = shift_local_calendar_days(
-            evaluation_start, days=-365, timezone=self.timezone
-        )
-        tier_reference = context.source.observations_as_of(
-            evaluation_start, start=tier_start
-        )
+        tier_start = shift_local_calendar_days(evaluation_start, days=-365, timezone=self.timezone)
+        tier_reference = context.source.observations_as_of(evaluation_start, start=tier_start)
         return (
             prepare_promotion_reference(current, tier_reference),
             tier_reference,
@@ -490,9 +463,7 @@ class AdaptiveReuseStrategy(ModelLifecycleStrategy):
         promotion = self.policy["promotion"]
         if not isinstance(promotion, dict):
             raise ValueError("policy is missing promotion settings")
-        current = self._scored_window(
-            context, days=int(promotion["evaluation_window_days"])
-        )
+        current = self._scored_window(context, days=int(promotion["evaluation_window_days"]))
         if current is None:
             self.audit_rows.append(
                 {"timestamp": context.now, "event": "trigger_deferred_incomplete_gate_window"}

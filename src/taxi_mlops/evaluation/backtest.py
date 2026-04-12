@@ -48,9 +48,9 @@ def rolling_baseline_backtest(
         common_available &= candidate["prediction"].notna().to_numpy()
 
     target_universe = candidates[0][["pickup_hour", "pickup_zone_id"]].copy()
-    target_universe["evaluation_week"] = target_universe["pickup_hour"].dt.tz_convert(
-        timezone
-    ).dt.strftime("%G-W%V")
+    target_universe["evaluation_week"] = (
+        target_universe["pickup_hour"].dt.tz_convert(timezone).dt.strftime("%G-W%V")
+    )
     requested_by_week = target_universe.groupby("evaluation_week").size()
 
     weekly_rows: list[dict[str, object]] = []
@@ -87,9 +87,7 @@ def rolling_baseline_backtest(
                 "worst_week": str(worst["evaluation_week"]),
                 "mean_weekly_wape": float(frame["wape"].mean()),
                 "minimum_prediction_coverage": float(frame["prediction_coverage"].min()),
-                "minimum_common_target_coverage": float(
-                    frame["common_target_coverage"].min()
-                ),
+                "minimum_common_target_coverage": float(frame["common_target_coverage"].min()),
             }
         )
     model_summaries.sort(key=lambda item: float(item["mean_weekly_mae"]))

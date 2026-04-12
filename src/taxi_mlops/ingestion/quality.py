@@ -76,9 +76,7 @@ def summarize_quality_reports(
         )
 
     table = pd.DataFrame(rows)
-    failed_months = (
-        table.loc[~table["quality_pass"], "month"].tolist() if not table.empty else []
-    )
+    failed_months = table.loc[~table["quality_pass"], "month"].tolist() if not table.empty else []
     summary: dict[str, object] = {
         "start_month": start_month,
         "end_month": end_month,
@@ -97,8 +95,7 @@ def summarize_quality_reports(
                 "total_valid_rows": int(table["valid_rows"].sum()),
                 "total_invalid_zone_rows": int(table["invalid_zone_rows"].sum()),
                 "overall_invalid_zone_rate": float(
-                    table["invalid_zone_rows"].sum()
-                    / table["rows_in_requested_interval"].sum()
+                    table["invalid_zone_rows"].sum() / table["rows_in_requested_interval"].sum()
                 ),
                 "total_out_of_interval_rows": int(table["out_of_interval_rows"].sum()),
                 "months_with_ambiguous_dst_hour": table.loc[

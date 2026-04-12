@@ -32,9 +32,7 @@ class MonthlyReplayDataSource:
         if cache_months < 1:
             raise ValueError("cache_months must be positive")
         self.cache_months = cache_months
-        self._cache: OrderedDict[str, tuple[pd.DataFrame, pd.DatetimeIndex]] = (
-            OrderedDict()
-        )
+        self._cache: OrderedDict[str, tuple[pd.DataFrame, pd.DatetimeIndex]] = OrderedDict()
 
     @property
     def data_start(self) -> pd.Timestamp:
@@ -52,12 +50,8 @@ class MonthlyReplayDataSource:
         if not path.is_file():
             raise FileNotFoundError(f"missing replay feature month: {path}")
         frame = pd.read_parquet(path)
-        frame["pickup_hour"] = pd.to_datetime(
-            frame["pickup_hour"], utc=True, errors="raise"
-        )
-        frame = frame.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(
-            drop=True
-        )
+        frame["pickup_hour"] = pd.to_datetime(frame["pickup_hour"], utc=True, errors="raise")
+        frame = frame.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(drop=True)
         partition = (frame, pd.DatetimeIndex(frame["pickup_hour"]))
         self._cache[month] = partition
         while len(self._cache) > self.cache_months:

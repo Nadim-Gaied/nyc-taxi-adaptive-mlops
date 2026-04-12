@@ -63,22 +63,16 @@ class ReplayModelStore:
         if registration_time < cutoff:
             raise ValueError("a model cannot be registered before its training cutoff")
         data = feature_table.copy()
-        data["pickup_hour"] = pd.to_datetime(
-            data["pickup_hour"], utc=True, errors="raise"
-        )
+        data["pickup_hour"] = pd.to_datetime(data["pickup_hour"], utc=True, errors="raise")
         if data["pickup_hour"].ge(cutoff).any():
             raise ValueError("training input contains observations unavailable at cutoff")
         columns = list(feature_columns)
         required = {"pickup_hour", "pickup_zone_id", "pickup_count", *columns}
         missing = required.difference(data.columns)
         if missing:
-            raise ValueError(
-                f"training data is missing columns: {', '.join(sorted(missing))}"
-            )
+            raise ValueError(f"training data is missing columns: {', '.join(sorted(missing))}")
         data_start = pd.Timestamp(data["pickup_hour"].min())
-        intervals = _history_intervals(
-            history_strategy, cutoff, data_start, timezone
-        )
+        intervals = _history_intervals(history_strategy, cutoff, data_start, timezone)
         train = _select_intervals(data, intervals)
         if train.empty:
             raise ValueError(f"no training rows for {history_strategy} at {cutoff}")
@@ -144,13 +138,9 @@ class ReplayModelStore:
             zone_categories=[int(value) for value in metadata["zone_categories"]],
         )
 
-    def predict(
-        self, model_id: str, features: pd.DataFrame
-    ) -> tuple[pd.Series, float]:
+    def predict(self, model_id: str, features: pd.DataFrame) -> tuple[pd.Series, float]:
         if model_id not in self._loaded:
-            records = [
-                record for record in self.registry.records() if record.model_id == model_id
-            ]
+            records = [record for record in self.registry.records() if record.model_id == model_id]
             if not records:
                 raise ValueError(f"model is not registered: {model_id}")
             self.load(records[0])
@@ -167,6 +157,4 @@ class ReplayModelStore:
         started = perf_counter()
         prediction = loaded.booster.predict(matrix)
         inference_seconds = perf_counter() - started
-        return pd.Series(prediction, index=features.index).clip(lower=0.0), float(
-            inference_seconds
-        )
+        return pd.Series(prediction, index=features.index).clip(lower=0.0), float(inference_seconds)

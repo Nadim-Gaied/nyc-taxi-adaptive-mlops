@@ -49,4 +49,3 @@ def test_characterization_rejects_incomplete_grid() -> None:
 
     with pytest.raises(ValueError, match="incomplete"):
         characterize_dataset(data)
-

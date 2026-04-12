@@ -107,9 +107,7 @@ def _canonical_expected_hours(
     ambiguous_hours = int(ambiguous_probe.isna().sum())
     nonexistent_hours = int(nonexistent_probe.isna().sum())
     canonical = nonexistent_probe.dropna().tz_convert("UTC")
-    physical_hours = len(
-        pd.date_range(start=start_utc, end=end_utc, freq="h", inclusive="left")
-    )
+    physical_hours = len(pd.date_range(start=start_utc, end=end_utc, freq="h", inclusive="left"))
     return canonical, physical_hours, ambiguous_hours, nonexistent_hours
 
 
@@ -148,9 +146,7 @@ def build_zone_hour_dataset(
         raise DataContractError("end must be aligned to an hour")
 
     valid_zone_series = pd.to_numeric(zones[zone_lookup_id_column], errors="coerce").dropna()
-    valid_zone_ids = sorted(
-        set(valid_zone_series.astype("int64")).difference(excluded_zone_ids)
-    )
+    valid_zone_ids = sorted(set(valid_zone_series.astype("int64")).difference(excluded_zone_ids))
     if not valid_zone_ids:
         raise DataContractError("zone lookup contains no eligible taxi zones")
 
@@ -158,9 +154,9 @@ def build_zone_hour_dataset(
     work["pickup_timestamp_utc"] = _parse_local_pickup_times(work[timestamp_column], timezone)
     invalid_timestamp = work["pickup_timestamp_utc"].isna()
     valid_timestamps = work.loc[~invalid_timestamp, "pickup_timestamp_utc"]
-    in_interval = work["pickup_timestamp_utc"].ge(start_utc) & work[
-        "pickup_timestamp_utc"
-    ].lt(end_utc)
+    in_interval = work["pickup_timestamp_utc"].ge(start_utc) & work["pickup_timestamp_utc"].lt(
+        end_utc
+    )
 
     interval = work.loc[in_interval].copy()
     interval["pickup_hour"] = interval["pickup_timestamp_utc"].dt.floor("h")
@@ -178,8 +174,7 @@ def build_zone_hour_dataset(
         preview = ", ".join(str(item) for item in missing_hours[:5])
         suffix = " ..." if len(missing_hours) > 5 else ""
         raise DataContractError(
-            f"raw input is missing {len(missing_hours)} expected source hour(s): "
-            f"{preview}{suffix}"
+            f"raw input is missing {len(missing_hours)} expected source hour(s): {preview}{suffix}"
         )
 
     valid_zone_mask = interval["pickup_zone_id"].isin(valid_zone_ids)
@@ -219,8 +214,7 @@ def build_zone_hour_dataset(
         invalid_timestamp_rows=int(invalid_timestamp.sum()),
         invalid_zone_rows=int((~valid_zone_mask).sum()),
         invalid_zone_id_counts={
-            _zone_count_key(zone_id): int(count)
-            for zone_id, count in invalid_zone_counts.items()
+            _zone_count_key(zone_id): int(count) for zone_id, count in invalid_zone_counts.items()
         },
         out_of_interval_rows=int((~invalid_timestamp & ~in_interval).sum()),
         rows_before_start=int(

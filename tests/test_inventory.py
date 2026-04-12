@@ -10,9 +10,7 @@ def test_inventory_reports_present_and_missing_months(tmp_path) -> None:
     year_dir.mkdir()
     pd.DataFrame(
         {
-            "tpep_pickup_datetime": pd.to_datetime(
-                ["2019-01-01 00:00:00", "2019-01-31 23:59:59"]
-            ),
+            "tpep_pickup_datetime": pd.to_datetime(["2019-01-01 00:00:00", "2019-01-31 23:59:59"]),
             "PULocationID": [1, 2],
         }
     ).to_parquet(year_dir / "yellow_tripdata_2019-01.parquet", index=False)
@@ -27,4 +25,3 @@ def test_inventory_reports_present_and_missing_months(tmp_path) -> None:
     assert inventory["missing_months"] == ["2019-02", "2019-03"]
     assert inventory["files"][0]["rows"] == 2
     assert inventory["files"][0]["pickup_timestamp_min"].startswith("2019-01-01")
-

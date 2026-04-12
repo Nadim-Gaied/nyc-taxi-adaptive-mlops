@@ -50,7 +50,9 @@ from taxi_mlops.production import (
     HourlyPredictionPipeline,
     HourlyScoringPipeline,
     MLflowLightGBMResolver,
+    ProductionMonitoringReporter,
     ProductionStateStore,
+    ScheduledTrainingPipeline,
     load_production_config,
 )
 from taxi_mlops.replay import (
@@ -265,9 +267,7 @@ def _window_experiment_split(args: argparse.Namespace) -> None:
         "evaluation_days": args.evaluation_days,
         "experiment_count": len(results),
         "figures": [str(path) for path in figures],
-        "best_mean_mae_window": str(
-            results.groupby("training_window")["mae"].mean().idxmin()
-        ),
+        "best_mean_mae_window": str(results.groupby("training_window")["mae"].mean().idxmin()),
     }
     _write_json(output_dir / "summary.json", concise)
     print(json.dumps(concise, indent=2))
@@ -280,11 +280,7 @@ def _feature_ablation_split(args: argparse.Namespace) -> None:
     tier_config = config["demand_tiers"]
     feature_groups = config["feature_groups"]
     feature_sets = {
-        name: [
-            column
-            for group_name in group_names
-            for column in feature_groups[group_name]
-        ]
+        name: [column for group_name in group_names for column in feature_groups[group_name]]
         for name, group_names in config["feature_sets"].items()
     }
     if args.feature_sets:
@@ -344,9 +340,9 @@ def _feature_ablation_split(args: argparse.Namespace) -> None:
     reference_feature_set = config["reference"]["feature_set"]
     paired_summary: list[dict[str, object]] = []
     if reference_feature_set in set(results["feature_set"]):
-        reference = results.loc[
-            results["feature_set"].eq(reference_feature_set)
-        ].set_index("cutoff")
+        reference = results.loc[results["feature_set"].eq(reference_feature_set)].set_index(
+            "cutoff"
+        )
         for feature_set_name, candidate in results.groupby("feature_set"):
             candidate = candidate.set_index("cutoff").loc[reference.index]
             wape_delta = candidate["wape"] - reference["wape"]
@@ -360,9 +356,7 @@ def _feature_ablation_split(args: argparse.Namespace) -> None:
                     ),
                     "origins_beating_reference": int(wape_delta.lt(0).sum()),
                     "origins_tied_reference": int(wape_delta.abs().lt(1e-12).sum()),
-                    "worst_origin_wape_delta_percentage_points": float(
-                        100 * wape_delta.max()
-                    ),
+                    "worst_origin_wape_delta_percentage_points": float(100 * wape_delta.max()),
                 }
             )
         pd.DataFrame(paired_summary).sort_values("mean_wape").to_csv(
@@ -625,9 +619,7 @@ def _training_history_experiment_split(args: argparse.Namespace) -> None:
     reference_name = "recent_365d"
     paired_rows: list[dict[str, object]] = []
     if reference_name in set(results["training_history"]):
-        reference = results.loc[
-            results["training_history"].eq(reference_name)
-        ].set_index("cutoff")
+        reference = results.loc[results["training_history"].eq(reference_name)].set_index("cutoff")
         for strategy, candidate in results.groupby("training_history"):
             candidate = candidate.set_index("cutoff").loc[reference.index]
             delta = candidate["wape"] - reference["wape"]
@@ -668,9 +660,7 @@ def _policy_validation_split(args: argparse.Namespace) -> None:
         return path if path.is_absolute() else project_root / path
 
     policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
-    with resolve_plan_path(plan["development_experiment"]).open(
-        encoding="utf-8"
-    ) as handle:
+    with resolve_plan_path(plan["development_experiment"]).open(encoding="utf-8") as handle:
         development_config = yaml.safe_load(handle)
 
     evaluation_config = plan["evaluation"]
@@ -716,30 +706,26 @@ def _policy_validation_split(args: argparse.Namespace) -> None:
         timezone=str(plan["timezone"]),
         tier_boundaries=tier_config["boundaries"],
         tier_labels=tier_config["labels"],
-        model_parameters=development_config.get("model_parameters", {}).get(
-            "lightgbm_poisson"
-        ),
+        model_parameters=development_config.get("model_parameters", {}).get("lightgbm_poisson"),
         checkpoint_dir=output_dir / "checkpoints",
     )
-    baseline_results, baseline_tiers, baseline_weeks = (
-        run_complete_baseline_validation(
-            data,
-            cutoffs=evaluation_config["origins"],
-            evaluation_days=int(evaluation_config["horizon_calendar_days"]),
-            timezone=str(plan["timezone"]),
-            tier_boundaries=tier_config["boundaries"],
-            tier_labels=tier_config["labels"],
-        )
+    baseline_results, baseline_tiers, baseline_weeks = run_complete_baseline_validation(
+        data,
+        cutoffs=evaluation_config["origins"],
+        evaluation_days=int(evaluation_config["horizon_calendar_days"]),
+        timezone=str(plan["timezone"]),
+        tier_boundaries=tier_config["boundaries"],
+        tier_labels=tier_config["labels"],
     )
     results = pd.concat([results, baseline_results], ignore_index=True).sort_values(
         ["cutoff", "wape", "training_history"]
     )
-    tier_results = pd.concat(
-        [tier_results, baseline_tiers], ignore_index=True
-    ).sort_values(["cutoff", "training_history", "demand_tier"])
-    weekly_results = pd.concat(
-        [weekly_results, baseline_weeks], ignore_index=True
-    ).sort_values(["cutoff", "training_history", "week_index"])
+    tier_results = pd.concat([tier_results, baseline_tiers], ignore_index=True).sort_values(
+        ["cutoff", "training_history", "demand_tier"]
+    )
+    weekly_results = pd.concat([weekly_results, baseline_weeks], ignore_index=True).sort_values(
+        ["cutoff", "training_history", "week_index"]
+    )
 
     alert_scorecard = build_alert_scorecard(
         weekly_results, policy, reference_history=reference_history
@@ -765,9 +751,7 @@ def _policy_validation_split(args: argparse.Namespace) -> None:
     tier_results.to_csv(output_dir / "policy_validation_tier_results.csv", index=False)
     weekly_results.to_csv(output_dir / "policy_validation_weekly_results.csv", index=False)
     alert_scorecard.to_csv(output_dir / "policy_validation_alerts.csv", index=False)
-    promotion_scorecard.to_csv(
-        output_dir / "policy_validation_promotions.csv", index=False
-    )
+    promotion_scorecard.to_csv(output_dir / "policy_validation_promotions.csv", index=False)
     _write_json(output_dir / "summary.json", summary)
     print(json.dumps(summary, indent=2))
 
@@ -804,9 +788,7 @@ def _seed_replay_registry(args: argparse.Namespace) -> None:
         path = Path(str(value))
         return path if path.is_absolute() else project_root / path
 
-    with resolve_plan_path("configs/development_experiments.yaml").open(
-        encoding="utf-8"
-    ) as handle:
+    with resolve_plan_path("configs/development_experiments.yaml").open(encoding="utf-8") as handle:
         development_config = yaml.safe_load(handle)
     feature_set = development_config["reference"]["feature_set"]
     feature_groups = development_config["feature_groups"]
@@ -825,9 +807,7 @@ def _seed_replay_registry(args: argparse.Namespace) -> None:
     )
     manifest_path = Path(args.output_dir) / "registry.json"
     registry = (
-        ModelRegistry.from_manifest(manifest_path)
-        if manifest_path.is_file()
-        else ModelRegistry()
+        ModelRegistry.from_manifest(manifest_path) if manifest_path.is_file() else ModelRegistry()
     )
     store = ReplayModelStore(Path(args.output_dir) / "models", registry)
     initialization = plan["initialization"]
@@ -839,9 +819,7 @@ def _seed_replay_registry(args: argparse.Namespace) -> None:
         feature_columns=feature_columns,
         feature_set=feature_set,
         timezone=plan["timezone"],
-        model_parameters=development_config.get("model_parameters", {}).get(
-            "lightgbm_poisson"
-        ),
+        model_parameters=development_config.get("model_parameters", {}).get("lightgbm_poisson"),
         manifest_path=manifest_path,
     )
     output_dir = Path(args.output_dir)
@@ -867,9 +845,7 @@ def _run_locked_replay(args: argparse.Namespace) -> None:
         return path if path.is_absolute() else project_root / path
 
     policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
-    with resolve_plan_path("configs/development_experiments.yaml").open(
-        encoding="utf-8"
-    ) as handle:
+    with resolve_plan_path("configs/development_experiments.yaml").open(encoding="utf-8") as handle:
         development_config = yaml.safe_load(handle)
     feature_set = development_config["reference"]["feature_set"]
     feature_groups = development_config["feature_groups"]
@@ -877,9 +853,7 @@ def _run_locked_replay(args: argparse.Namespace) -> None:
     feature_columns = [
         column for group_name in selected_groups for column in feature_groups[group_name]
     ]
-    _, history_start, _ = split_months(
-        resolve_plan_path(plan["split_manifest"]), "development"
-    )
+    _, history_start, _ = split_months(resolve_plan_path(plan["split_manifest"]), "development")
     comparison = run_locked_replay(
         feature_root=args.feature_root,
         output_dir=args.output_dir,
@@ -889,9 +863,7 @@ def _run_locked_replay(args: argparse.Namespace) -> None:
         history_start=history_start,
         feature_columns=feature_columns,
         feature_set=feature_set,
-        model_parameters=development_config.get("model_parameters", {}).get(
-            "lightgbm_poisson"
-        ),
+        model_parameters=development_config.get("model_parameters", {}).get("lightgbm_poisson"),
         resume_completed=args.resume_completed,
     )
     print(comparison.to_string(index=False))
@@ -960,9 +932,7 @@ def _run_production_hour(args: argparse.Namespace) -> None:
         timezone=config.timezone,
         expected_zones=config.expected_zones,
     )
-    result: dict[str, object] = {
-        "prediction": asdict(prediction_pipeline.run(args.target_hour))
-    }
+    result: dict[str, object] = {"prediction": asdict(prediction_pipeline.run(args.target_hour))}
     if args.score_as_of:
         scoring_pipeline = HourlyScoringPipeline(
             feature_root=config.storage.feature_root,
@@ -970,10 +940,22 @@ def _run_production_hour(args: argparse.Namespace) -> None:
             state_store=state,
             timezone=config.timezone,
         )
-        result["score"] = asdict(
-            scoring_pipeline.run(args.target_hour, as_of=args.score_as_of)
-        )
+        result["score"] = asdict(scoring_pipeline.run(args.target_hour, as_of=args.score_as_of))
     print(json.dumps(result, indent=2))
+
+
+def _train_production_model(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    pipeline = ScheduledTrainingPipeline(config=config, state_store=state)
+    print(json.dumps(pipeline.run(args.as_of, force=args.force).to_dict(), indent=2))
+
+
+def _build_production_monitoring(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    reporter = ProductionMonitoringReporter(config=config, state_store=state)
+    print(json.dumps(reporter.build(as_of=args.as_of).to_dict(), indent=2))
 
 
 def _analyze_regimes_split(args: argparse.Namespace) -> None:
@@ -1302,6 +1284,25 @@ def _parser() -> argparse.ArgumentParser:
     production_hour.add_argument("--target-hour", required=True)
     production_hour.add_argument("--score-as-of")
     production_hour.set_defaults(handler=_run_production_hour)
+
+    production_train = subparsers.add_parser(
+        "train-production-model",
+        help="run the configured 28-day scheduled training and registration step",
+    )
+    production_train.add_argument("--config", default="configs/production.yaml")
+    production_train.add_argument("--project-root", default=".")
+    production_train.add_argument("--as-of", required=True)
+    production_train.add_argument("--force", action="store_true")
+    production_train.set_defaults(handler=_train_production_model)
+
+    production_monitoring = subparsers.add_parser(
+        "build-production-monitoring",
+        help="build a reproducible forecast-quality and operations dashboard",
+    )
+    production_monitoring.add_argument("--config", default="configs/production.yaml")
+    production_monitoring.add_argument("--project-root", default=".")
+    production_monitoring.add_argument("--as-of", required=True)
+    production_monitoring.set_defaults(handler=_build_production_monitoring)
 
     regimes = subparsers.add_parser(
         "analyze-regimes-split",

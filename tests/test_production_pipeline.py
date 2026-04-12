@@ -130,11 +130,13 @@ tracking:
   artifact_root: state/artifacts
   experiment_name: production
   registered_model_name: taxi-demand
+  reference_alias: accuracy-reference
   production_alias: accuracy-reference
 storage:
   feature_root: features
   prediction_root: predictions
   score_root: scores
+  model_root: models
   state_db: state/production.db
 lifecycle:
   strategy: fixed_periodic_28d

@@ -14,6 +14,7 @@ class TrackingConfig:
     artifact_root: Path
     experiment_name: str
     registered_model_name: str
+    reference_alias: str
     production_alias: str
 
 
@@ -22,7 +23,9 @@ class StorageConfig:
     feature_root: Path
     prediction_root: Path
     score_root: Path
+    model_root: Path
     state_db: Path
+    monitoring_root: Path
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,8 @@ class MonitoringConfig:
     weekly_wape_severe: float
     reporting_timezone: str
     drift_can_trigger_retraining_alone: bool
+    alert_window_hours: int
+    zone_lookback_days: int
 
 
 @dataclass(frozen=True)
@@ -93,13 +98,18 @@ def load_production_config(
             artifact_root=_resolve(root, str(tracking["artifact_root"])),
             experiment_name=str(tracking["experiment_name"]),
             registered_model_name=str(tracking["registered_model_name"]),
+            reference_alias=str(tracking["reference_alias"]),
             production_alias=str(tracking["production_alias"]),
         ),
         storage=StorageConfig(
             feature_root=_resolve(root, str(storage["feature_root"])),
             prediction_root=_resolve(root, str(storage["prediction_root"])),
             score_root=_resolve(root, str(storage["score_root"])),
+            model_root=_resolve(root, str(storage["model_root"])),
             state_db=_resolve(root, str(storage["state_db"])),
+            monitoring_root=_resolve(
+                root, str(storage.get("monitoring_root", "data/production/monitoring"))
+            ),
         ),
         lifecycle=LifecycleConfig(
             strategy=str(lifecycle["strategy"]),
@@ -115,6 +125,8 @@ def load_production_config(
             drift_can_trigger_retraining_alone=bool(
                 monitoring["drift_can_trigger_retraining_alone"]
             ),
+            alert_window_hours=int(monitoring.get("alert_window_hours", 168)),
+            zone_lookback_days=int(monitoring.get("zone_lookback_days", 28)),
         ),
     )
     if config.version != 1:
@@ -125,4 +137,8 @@ def load_production_config(
         raise ValueError("retrain cadence must be positive")
     if config.monitoring.weekly_wape_severe <= config.monitoring.weekly_wape_warning:
         raise ValueError("severe WAPE threshold must exceed warning threshold")
+    if config.monitoring.alert_window_hours < 1:
+        raise ValueError("monitoring alert window must be positive")
+    if config.monitoring.zone_lookback_days < 1:
+        raise ValueError("monitoring zone lookback must be positive")
     return config

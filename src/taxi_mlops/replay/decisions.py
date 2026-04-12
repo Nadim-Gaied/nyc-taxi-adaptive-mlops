@@ -84,16 +84,12 @@ def prepare_promotion_reference(
         cumulative_boundaries=(0.80, 0.95),
         tier_labels=("high", "medium", "low"),
     )
-    current_tiers = tier_regression_metrics(current_predictions, tiers).set_index(
-        "demand_tier"
-    )
+    current_tiers = tier_regression_metrics(current_predictions, tiers).set_index("demand_tier")
     zone_codes, zone_values = pd.factorize(targets["pickup_zone_id"], sort=True)
     tier_by_zone = tiers.set_index("pickup_zone_id")["demand_tier"]
     target_tiers = targets["pickup_zone_id"].map(tier_by_zone)
     tier_categories = list(current_tiers.index)
-    tier_codes = pd.Categorical(
-        target_tiers, categories=tier_categories
-    ).codes.astype(np.int64)
+    tier_codes = pd.Categorical(target_tiers, categories=tier_categories).codes.astype(np.int64)
     if (tier_codes < 0).any():
         raise ValueError("current targets contain zones without demand tiers")
     pickup_count = targets["pickup_count"].to_numpy(dtype=float, copy=True)
@@ -149,9 +145,7 @@ def evaluate_promotion_candidate(
         and np.array_equal(candidate_count, reference.pickup_count)
     )
     if not aligned:
-        candidate = candidate.sort_values(
-            ["pickup_hour", "pickup_zone_id"]
-        ).reset_index(drop=True)
+        candidate = candidate.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(drop=True)
         candidate_hour_ns = (
             pd.to_datetime(candidate["pickup_hour"], utc=True, errors="raise")
             .astype("int64")
@@ -208,12 +202,10 @@ def evaluate_promotion_candidate(
     )
     maximum_tier_regression = float(tier_regressions.max())
     zone_regression = float(
-        float(candidate_metrics["zone_mae_p95"])
-        - float(current_metrics["zone_mae_p95"])
+        float(candidate_metrics["zone_mae_p95"]) - float(current_metrics["zone_mae_p95"])
     )
     bias_regression = float(
-        abs(float(candidate_metrics["mean_bias"]))
-        - abs(float(current_metrics["mean_bias"]))
+        abs(float(candidate_metrics["mean_bias"])) - abs(float(current_metrics["mean_bias"]))
     )
     gates = {
         "coverage_gate_pass": float(candidate_metrics["prediction_coverage"])
@@ -224,8 +216,7 @@ def evaluate_promotion_candidate(
         <= float(promotion["maximum_tier_wape_regression"]),
         "zone_tail_gate_pass": zone_regression
         <= float(promotion["maximum_zone_mae_p95_regression"]),
-        "bias_gate_pass": (not bool(promotion["require_bias_not_worse"]))
-        or bias_regression <= 0,
+        "bias_gate_pass": (not bool(promotion["require_bias_not_worse"])) or bias_regression <= 0,
     }
     return {
         "current_wape": float(current_metrics["wape"]),

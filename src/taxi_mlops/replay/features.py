@@ -38,9 +38,7 @@ def build_monthly_feature_store(
             continue
 
         current = pd.read_parquet(source_path)
-        current["pickup_hour"] = pd.to_datetime(
-            current["pickup_hour"], utc=True, errors="raise"
-        )
+        current["pickup_hour"] = pd.to_datetime(current["pickup_hour"], utc=True, errors="raise")
         current_start = pd.Timestamp(current["pickup_hour"].min())
         previous_month = str(pd.Period(month, freq="M") - 1)
         previous_path = _month_path(canonical_root, previous_month, "zone_hour")
@@ -58,10 +56,14 @@ def build_monthly_feature_store(
         features = features.loc[features["pickup_hour"].ge(current_start)].copy()
         if len(features) != len(current):
             raise ValueError(f"feature row count differs from canonical month {month}")
-        if not features["pickup_count"].reset_index(drop=True).equals(
-            current.sort_values(["pickup_hour", "pickup_zone_id"])[
-                "pickup_count"
-            ].reset_index(drop=True)
+        if (
+            not features["pickup_count"]
+            .reset_index(drop=True)
+            .equals(
+                current.sort_values(["pickup_hour", "pickup_zone_id"])["pickup_count"].reset_index(
+                    drop=True
+                )
+            )
         ):
             raise ValueError(f"feature targets differ from canonical month {month}")
         output_path.parent.mkdir(parents=True, exist_ok=True)

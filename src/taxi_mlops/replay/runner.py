@@ -81,13 +81,9 @@ def run_locked_replay(
         if resume_completed and all(path.is_file() for path in required_outputs):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             if summary.get("strategy") != strategy_name:
-                raise ValueError(
-                    f"completed summary does not match strategy: {strategy_name}"
-                )
+                raise ValueError(f"completed summary does not match strategy: {strategy_name}")
             if int(summary.get("observations", 0)) <= 0:
-                raise ValueError(
-                    f"completed strategy has no scored observations: {strategy_name}"
-                )
+                raise ValueError(f"completed strategy has no scored observations: {strategy_name}")
             summaries.append(summary)
             print(f"Resumed completed locked replay strategy: {strategy_name}", flush=True)
             continue

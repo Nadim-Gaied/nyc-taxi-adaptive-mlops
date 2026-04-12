@@ -51,8 +51,7 @@ def run_feature_ablation_experiment(
             cutoff.tz_convert(timezone) + pd.DateOffset(days=evaluation_days)
         ).tz_convert("UTC")
         targets_by_cutoff[cutoff] = data.loc[
-            data["pickup_hour"].ge(cutoff)
-            & data["pickup_hour"].lt(evaluation_end),
+            data["pickup_hour"].ge(cutoff) & data["pickup_hour"].lt(evaluation_end),
             ["pickup_hour", "pickup_zone_id", "pickup_count"],
         ]
 
@@ -129,12 +128,11 @@ def run_feature_ablation_experiment(
             )
 
             cutoff_local = cutoff.tz_convert(timezone)
-            training_start = (
-                cutoff_local - pd.DateOffset(days=training_window_days)
-            ).tz_convert("UTC")
+            training_start = (cutoff_local - pd.DateOffset(days=training_window_days)).tz_convert(
+                "UTC"
+            )
             training = data.loc[
-                data["pickup_hour"].ge(training_start)
-                & data["pickup_hour"].lt(cutoff)
+                data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(cutoff)
             ]
             tiers = assign_demand_tiers(
                 training,

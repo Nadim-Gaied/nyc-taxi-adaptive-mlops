@@ -29,13 +29,9 @@ class _Totals:
             "observations": self.observations,
             "actual_pickups": self.actual,
             "predicted_pickups": self.predicted,
-            "mae": self.absolute_error / self.observations
-            if self.observations
-            else None,
+            "mae": self.absolute_error / self.observations if self.observations else None,
             "wape": self.absolute_error / self.actual if self.actual else None,
-            "mean_bias": self.signed_error / self.observations
-            if self.observations
-            else None,
+            "mean_bias": self.signed_error / self.observations if self.observations else None,
         }
 
 
@@ -62,9 +58,7 @@ class ReplayMetricsAccumulator:
             raise ValueError("zone tiers contain duplicate zone IDs")
         ordered = zone_tiers.sort_values("pickup_zone_id").reset_index(drop=True)
         self.zone_ids = ordered["pickup_zone_id"].astype(int).to_numpy()
-        self.zone_positions = {
-            int(zone_id): index for index, zone_id in enumerate(self.zone_ids)
-        }
+        self.zone_positions = {int(zone_id): index for index, zone_id in enumerate(self.zone_ids)}
         self.tier_labels = list(dict.fromkeys(ordered["demand_tier"].astype(str)))
         tier_position = {label: index for index, label in enumerate(self.tier_labels)}
         self.zone_tier_positions = np.array(
@@ -110,17 +104,11 @@ class ReplayMetricsAccumulator:
             mask = self.zone_tier_positions[positions] == tier_index
             self._tiers[int(tier_index)].add(actual[mask], predicted[mask])
 
-        local_dates = pd.to_datetime(scored["pickup_hour"], utc=True).dt.tz_convert(
-            self.timezone
-        )
+        local_dates = pd.to_datetime(scored["pickup_hour"], utc=True).dt.tz_convert(self.timezone)
         replay_local = self.replay_start.tz_convert(self.timezone)
         normalized_start = replay_local.normalize().tz_localize(None)
         normalized_dates = local_dates.dt.normalize().dt.tz_localize(None)
-        week_indices = (
-            (normalized_dates - normalized_start)
-            .dt.days.floordiv(7)
-            .astype(int)
-        )
+        week_indices = (normalized_dates - normalized_start).dt.days.floordiv(7).astype(int)
         for week_index in week_indices.unique():
             mask = week_indices.eq(week_index).to_numpy()
             totals = self._weekly.setdefault(int(week_index), _Totals())
@@ -139,15 +127,9 @@ class ReplayMetricsAccumulator:
             {
                 "zones": int(len(eligible)),
                 "macro_zone_mae": float(np.mean(eligible)) if len(eligible) else None,
-                "zone_mae_p50": float(np.quantile(eligible, 0.50))
-                if len(eligible)
-                else None,
-                "zone_mae_p90": float(np.quantile(eligible, 0.90))
-                if len(eligible)
-                else None,
-                "zone_mae_p95": float(np.quantile(eligible, 0.95))
-                if len(eligible)
-                else None,
+                "zone_mae_p50": float(np.quantile(eligible, 0.50)) if len(eligible) else None,
+                "zone_mae_p90": float(np.quantile(eligible, 0.90)) if len(eligible) else None,
+                "zone_mae_p95": float(np.quantile(eligible, 0.95)) if len(eligible) else None,
                 "zone_mae_max": float(np.max(eligible)) if len(eligible) else None,
             }
         )
@@ -160,9 +142,7 @@ class ReplayMetricsAccumulator:
             rows.append(
                 {
                     "week_index": week_index + 1,
-                    "week_start": str(
-                        (start_local + pd.DateOffset(days=7 * week_index)).date()
-                    ),
+                    "week_start": str((start_local + pd.DateOffset(days=7 * week_index)).date()),
                     **totals.metrics(),
                 }
             )

@@ -41,9 +41,7 @@ def test_window_experiment_keeps_evaluation_targets_fixed() -> None:
 
 
 def test_seasonal_gap_experiment_uses_same_targets_for_both_strategies() -> None:
-    hours = pd.date_range(
-        "2019-01-01", "2020-02-01", freq="h", inclusive="left", tz="UTC"
-    )
+    hours = pd.date_range("2019-01-01", "2020-02-01", freq="h", inclusive="left", tz="UTC")
     data = pd.DataFrame(
         {
             "pickup_hour": hours,

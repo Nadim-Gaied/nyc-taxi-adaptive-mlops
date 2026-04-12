@@ -23,8 +23,7 @@ def month_sequence(start_month: str, end_month: str) -> list[str]:
     if end_index < start_index:
         raise ValueError("end_month must not be earlier than start_month")
     return [
-        f"{index // 12:04d}-{index % 12 + 1:02d}"
-        for index in range(start_index, end_index + 1)
+        f"{index // 12:04d}-{index % 12 + 1:02d}" for index in range(start_index, end_index + 1)
     ]
 
 

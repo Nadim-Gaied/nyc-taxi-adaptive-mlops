@@ -53,9 +53,7 @@ def seed_replay_registry(
                     }
                 )
                 continue
-            intervals = _history_intervals(
-                history, origin, source.data_start, timezone
-            )
+            intervals = _history_intervals(history, origin, source.data_start, timezone)
             training_data = source.observations_as_of(
                 origin, start=min(start for start, _ in intervals)
             )

@@ -41,9 +41,7 @@ def _feature_table() -> pd.DataFrame:
             "pickup_hour": list(hours) * 2,
             "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
             "pickup_count": [
-                zone * 10 + index % 24
-                for zone in (1, 2)
-                for index in range(len(hours))
+                zone * 10 + index % 24 for zone in (1, 2) for index in range(len(hours))
             ],
             "lag_1h": [0.0] * (2 * len(hours)),
         }
@@ -61,9 +59,7 @@ def test_replay_source_hides_current_and_future_labels() -> None:
     assert "pickup_count" not in features.columns
     assert features["pickup_hour"].eq(now).all()
     with pytest.raises(ValueError, match="current clock hour"):
-        source.prediction_features(
-            now + pd.Timedelta(hours=1), as_of=now
-        )
+        source.prediction_features(now + pd.Timedelta(hours=1), as_of=now)
     with pytest.raises(ValueError, match="not yet released"):
         source.labels_between(now, now + pd.Timedelta(hours=1), as_of=now)
 
@@ -82,9 +78,7 @@ def test_prediction_ledger_enforces_generation_time_and_scores_later() -> None:
 
     ledger.record(predictions, generated_at=target, model_id="model-1")
     assert ledger.score_available(source, as_of=target).empty
-    scored = ledger.score_available(
-        source, as_of=target + pd.Timedelta(hours=1)
-    )
+    scored = ledger.score_available(source, as_of=target + pd.Timedelta(hours=1))
     assert len(scored) == 2
     assert scored["pickup_count"].notna().all()
     with pytest.raises(ValueError, match="after their target"):
@@ -190,9 +184,7 @@ def test_replay_engine_orders_release_decision_and_prediction_without_future_acc
     assert strategy.observed_rows == 52
     assert strategy.decisions == 1
     assert engine.ledger.frame()["scored"].all()
-    decision_time = events.loc[
-        events["event"].eq("lifecycle_decision"), "timestamp"
-    ].iloc[0]
+    decision_time = events.loc[events["event"].eq("lifecycle_decision"), "timestamp"].iloc[0]
     at_decision = events.loc[events["timestamp"].eq(decision_time), "event"].tolist()
     assert at_decision == [
         "labels_scored",
@@ -245,9 +237,7 @@ def test_locked_replay_plan_freezes_strategies_and_keeps_2020(tmp_path) -> None:
     assert plan["access"]["open_locked_replay_during_engine_development"] is False
 
     invalid_plan = yaml.safe_load(source.read_text(encoding="utf-8"))
-    invalid_plan["interpretation_contract"][
-        "tune_policy_during_locked_replay"
-    ] = True
+    invalid_plan["interpretation_contract"]["tune_policy_during_locked_replay"] = True
     invalid = tmp_path / "locked_replay.yaml"
     invalid.write_text(yaml.safe_dump(invalid_plan), encoding="utf-8")
     with pytest.raises(ValueError, match="tuning"):
@@ -292,13 +282,9 @@ def test_frozen_monitor_and_promotion_gate_use_common_holdout() -> None:
     )
     candidate = current.copy()
     candidate["prediction"] = [102.0, 51.0]
-    tier_reference = pd.DataFrame(
-        {"pickup_zone_id": [1, 2], "pickup_count": [1000.0, 100.0]}
-    )
+    tier_reference = pd.DataFrame({"pickup_zone_id": [1, 2], "pickup_count": [1000.0, 100.0]})
 
-    gate = evaluate_promotion_candidate(
-        current, candidate, tier_reference, policy
-    )
+    gate = evaluate_promotion_candidate(current, candidate, tier_reference, policy)
     assert gate["all_quality_gates_pass"]
     assert gate["relative_wape_improvement"] > 0.01
 
@@ -315,9 +301,7 @@ def test_fixed_periodic_strategy_trains_persists_and_switches(tmp_path) -> None:
             "pickup_hour": list(hours) * 2,
             "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
             "pickup_count": [
-                zone * 5 + index % 24 + index % 7
-                for zone in (1, 2)
-                for index in range(len(hours))
+                zone * 5 + index % 24 + index % 7 for zone in (1, 2) for index in range(len(hours))
             ],
         }
     )
@@ -325,9 +309,7 @@ def test_fixed_periodic_strategy_trains_persists_and_switches(tmp_path) -> None:
     registry = ModelRegistry()
     store = ReplayModelStore(tmp_path / "models", registry)
     project_root = Path(__file__).resolve().parents[1]
-    policy = load_lifecycle_policy(
-        project_root / "configs/lifecycle_policy_final_v1.yaml"
-    )
+    policy = load_lifecycle_policy(project_root / "configs/lifecycle_policy_final_v1.yaml")
     strategy = FixedPeriodicStrategy(
         model_store=store,
         policy=policy,
@@ -416,9 +398,7 @@ def _constant_replay_features() -> pd.DataFrame:
 
 def _synthetic_final_policy() -> dict[str, object]:
     project_root = Path(__file__).resolve().parents[1]
-    return load_lifecycle_policy(
-        project_root / "configs/lifecycle_policy_final_v1.yaml"
-    )
+    return load_lifecycle_policy(project_root / "configs/lifecycle_policy_final_v1.yaml")
 
 
 def test_performance_triggered_strategy_uses_holdout_then_refits() -> None:
@@ -453,15 +433,11 @@ def test_performance_triggered_strategy_uses_holdout_then_refits() -> None:
     deployment = next(row for row in trained if row["purpose"] == "deployment")
     evaluation_record = registry.records()[1]
     deployment_record = registry.records()[2]
-    assert pd.Timestamp(evaluation["timestamp"]) == pd.Timestamp(
-        evaluation_record.trained_at
-    )
+    assert pd.Timestamp(evaluation["timestamp"]) == pd.Timestamp(evaluation_record.trained_at)
     assert pd.Timestamp(evaluation_record.trained_at) - pd.Timestamp(
         evaluation_record.training_end
     ) == pd.Timedelta(days=28)
-    assert pd.Timestamp(deployment["timestamp"]) == pd.Timestamp(
-        deployment_record.trained_at
-    )
+    assert pd.Timestamp(deployment["timestamp"]) == pd.Timestamp(deployment_record.trained_at)
 
 
 def test_adaptive_strategy_reuses_eligible_old_model_before_retraining() -> None:
@@ -520,9 +496,7 @@ def test_monthly_feature_store_preserves_boundary_history_and_future_gate(
                 "pickup_hour": list(hours) * 2,
                 "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
                 "pickup_count": [
-                    zone * 100 + index
-                    for zone in (1, 2)
-                    for index in range(len(hours))
+                    zone * 100 + index for zone in (1, 2) for index in range(len(hours))
                 ],
             }
         )
@@ -538,9 +512,7 @@ def test_monthly_feature_store_preserves_boundary_history_and_future_gate(
         timezone="UTC",
     )
     assert report["status"].eq("written").all()
-    february = pd.read_parquet(
-        feature_root / "2020" / "features_2020-02.parquet"
-    )
+    february = pd.read_parquet(feature_root / "2020" / "features_2020-02.parquet")
     first_hour = february.loc[
         february["pickup_hour"].eq(pd.Timestamp("2020-02-01T00:00:00Z"))
     ].sort_values("pickup_zone_id")
@@ -573,17 +545,13 @@ def test_locked_replay_runner_compares_all_strategies_on_identical_targets(
             "pickup_hour": list(hours) * 2,
             "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
             "pickup_count": [
-                zone * 5 + index % 24 + index % 7
-                for zone in (1, 2)
-                for index in range(len(hours))
+                zone * 5 + index % 24 + index % 7 for zone in (1, 2) for index in range(len(hours))
             ],
         }
     )
     features = build_feature_table(canonical, timezone="UTC")
     feature_root = tmp_path / "features"
-    for month, frame in features.groupby(
-        features["pickup_hour"].dt.strftime("%Y-%m"), sort=True
-    ):
+    for month, frame in features.groupby(features["pickup_hour"].dt.strftime("%Y-%m"), sort=True):
         path = feature_root / month[:4] / f"features_{month}.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(path, index=False)

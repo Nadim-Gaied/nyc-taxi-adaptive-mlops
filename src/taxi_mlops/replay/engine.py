@@ -34,9 +34,7 @@ class ReplayStrategy(Protocol):
 
     def decide(self, context: ReplayContext) -> None: ...
 
-    def predict(
-        self, context: ReplayContext, features: pd.DataFrame
-    ) -> pd.DataFrame: ...
+    def predict(self, context: ReplayContext, features: pd.DataFrame) -> pd.DataFrame: ...
 
 
 class ReplayEngine:
@@ -82,24 +80,25 @@ class ReplayEngine:
                     {"timestamp": context.now, "event": "lifecycle_decision", "rows": 0}
                 )
                 self.clock.mark_decision()
-            features = self.source.prediction_features(
-                context.now, as_of=context.now
-            )
+            features = self.source.prediction_features(context.now, as_of=context.now)
             if not features.empty:
                 predictions = self.strategy.predict(context, features)
                 required = {"pickup_hour", "pickup_zone_id", "prediction", "model_id"}
                 missing = required.difference(predictions.columns)
                 if missing:
                     raise ValueError(
-                        "strategy predictions are missing columns: "
-                        f"{', '.join(sorted(missing))}"
+                        f"strategy predictions are missing columns: {', '.join(sorted(missing))}"
                     )
-                expected_keys = features[["pickup_hour", "pickup_zone_id"]].sort_values(
-                    ["pickup_hour", "pickup_zone_id"]
-                ).reset_index(drop=True)
-                prediction_keys = predictions[
-                    ["pickup_hour", "pickup_zone_id"]
-                ].sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(drop=True)
+                expected_keys = (
+                    features[["pickup_hour", "pickup_zone_id"]]
+                    .sort_values(["pickup_hour", "pickup_zone_id"])
+                    .reset_index(drop=True)
+                )
+                prediction_keys = (
+                    predictions[["pickup_hour", "pickup_zone_id"]]
+                    .sort_values(["pickup_hour", "pickup_zone_id"])
+                    .reset_index(drop=True)
+                )
                 if not prediction_keys.equals(expected_keys):
                     raise ValueError("strategy did not predict the complete target grid")
                 if predictions["model_id"].nunique() != 1:

@@ -72,9 +72,7 @@ def test_alert_and_promotion_scorecards_apply_frozen_gates() -> None:
             "wape": [0.15, 0.15, 0.17, 0.13],
         }
     )
-    alerts = build_alert_scorecard(
-        weekly, _policy(), reference_history="recent_365d"
-    )
+    alerts = build_alert_scorecard(weekly, _policy(), reference_history="recent_365d")
 
     assert alerts["warning_breach"].sum() == 3
     assert alerts["severe_breach"].sum() == 1
@@ -137,12 +135,8 @@ def test_alert_and_promotion_scorecards_apply_frozen_gates() -> None:
         candidate_histories=["seasonal_90d_1y_gap", "expanding"],
     )
 
-    seasonal = promotions.loc[
-        promotions["candidate_history"].eq("seasonal_90d_1y_gap")
-    ].iloc[0]
-    expanding = promotions.loc[
-        promotions["candidate_history"].eq("expanding")
-    ].iloc[0]
+    seasonal = promotions.loc[promotions["candidate_history"].eq("seasonal_90d_1y_gap")].iloc[0]
+    expanding = promotions.loc[promotions["candidate_history"].eq("expanding")].iloc[0]
     assert seasonal["all_quality_gates_pass"]
     assert seasonal["promotion_pressure"]
     assert not expanding["wape_improvement_gate_pass"]
@@ -157,17 +151,13 @@ def test_alert_and_promotion_scorecards_apply_frozen_gates() -> None:
 
 
 def test_complete_baseline_validation_has_full_coverage() -> None:
-    hours = pd.date_range(
-        "2018-01-01", "2019-02-01", freq="h", inclusive="left", tz="UTC"
-    )
+    hours = pd.date_range("2018-01-01", "2019-02-01", freq="h", inclusive="left", tz="UTC")
     data = pd.DataFrame(
         {
             "pickup_hour": list(hours) * 2,
             "pickup_zone_id": [1] * len(hours) + [2] * len(hours),
             "pickup_count": [
-                zone * 4 + index % 24
-                for zone in (1, 2)
-                for index in range(len(hours))
+                zone * 4 + index % 24 for zone in (1, 2) for index in range(len(hours))
             ],
         }
     )

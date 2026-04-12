@@ -44,8 +44,10 @@ def split_months(
         raise DataContractError(f"{split_name} boundaries must include UTC offsets")
     if end <= start:
         raise DataContractError(f"{split_name} end must be later than its start")
-    if start.day != 1 or end.day != 1 or any(
-        (start.hour, start.minute, start.second, end.hour, end.minute, end.second)
+    if (
+        start.day != 1
+        or end.day != 1
+        or any((start.hour, start.minute, start.second, end.hour, end.minute, end.second))
     ):
         raise DataContractError(f"{split_name} boundaries must be aligned to local months")
 
@@ -74,9 +76,7 @@ def load_named_split(
 
     months, start_utc, end_utc = split_months(manifest_path, split_name)
     monthly_root = Path(monthly_root)
-    paths = {
-        month: monthly_root / month[:4] / f"zone_hour_{month}.parquet" for month in months
-    }
+    paths = {month: monthly_root / month[:4] / f"zone_hour_{month}.parquet" for month in months}
     missing = [month for month, path in paths.items() if not path.is_file()]
     if missing:
         preview = ", ".join(missing[:6])

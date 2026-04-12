@@ -27,20 +27,14 @@ def validate_common_targets(
                 f"{', '.join(sorted(missing))}"
             )
         targets = predictions[TARGET_COLUMNS].copy()
-        targets["pickup_hour"] = pd.to_datetime(
-            targets["pickup_hour"], utc=True, errors="raise"
-        )
+        targets["pickup_hour"] = pd.to_datetime(targets["pickup_hour"], utc=True, errors="raise")
         if targets.duplicated(["pickup_hour", "pickup_zone_id"]).any():
             raise ValueError(f"candidate {candidate_name} contains duplicate target keys")
-        targets = targets.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(
-            drop=True
-        )
+        targets = targets.sort_values(["pickup_hour", "pickup_zone_id"]).reset_index(drop=True)
         if canonical is None:
             canonical = targets
         elif not targets.equals(canonical):
-            raise ValueError(
-                f"candidate {candidate_name} does not use the common target rows"
-            )
+            raise ValueError(f"candidate {candidate_name} does not use the common target rows")
 
     if canonical is None:  # pragma: no cover - guarded by the non-empty check
         raise RuntimeError("common target validation produced no canonical frame")
@@ -64,9 +58,7 @@ def assign_demand_tiers(
     required = {"pickup_zone_id", "pickup_count"}
     missing = required.difference(training_data.columns)
     if missing:
-        raise ValueError(
-            f"training data is missing columns: {', '.join(sorted(missing))}"
-        )
+        raise ValueError(f"training data is missing columns: {', '.join(sorted(missing))}")
     boundaries = tuple(float(boundary) for boundary in cumulative_boundaries)
     if len(tier_labels) != len(boundaries) + 1:
         raise ValueError("tier_labels must contain one more value than boundaries")
@@ -123,15 +115,12 @@ def tier_regression_metrics(
     missing_predictions = required_predictions.difference(predictions.columns)
     if missing_predictions:
         raise ValueError(
-            "predictions are missing columns: "
-            f"{', '.join(sorted(missing_predictions))}"
+            f"predictions are missing columns: {', '.join(sorted(missing_predictions))}"
         )
     required_tiers = {"pickup_zone_id", "demand_tier"}
     missing_tiers = required_tiers.difference(zone_tiers.columns)
     if missing_tiers:
-        raise ValueError(
-            f"zone tiers are missing columns: {', '.join(sorted(missing_tiers))}"
-        )
+        raise ValueError(f"zone tiers are missing columns: {', '.join(sorted(missing_tiers))}")
     if zone_tiers["pickup_zone_id"].duplicated().any():
         raise ValueError("zone tiers contain duplicate pickup_zone_id values")
 
@@ -150,9 +139,7 @@ def tier_regression_metrics(
         missing_zone_ids = sorted(eligible.loc[unassigned, "pickup_zone_id"].unique())
         raise ValueError(f"predictions contain zones without tiers: {missing_zone_ids}")
 
-    eligible["absolute_error"] = (
-        eligible["pickup_count"] - eligible["prediction"]
-    ).abs()
+    eligible["absolute_error"] = (eligible["pickup_count"] - eligible["prediction"]).abs()
     eligible["signed_error"] = eligible["prediction"] - eligible["pickup_count"]
     metrics = (
         eligible.groupby("demand_tier", observed=True, as_index=False)

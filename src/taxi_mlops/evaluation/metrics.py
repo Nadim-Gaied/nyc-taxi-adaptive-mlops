@@ -5,9 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 
-def _eligible_predictions(
-    predictions: pd.DataFrame, *, require_complete: bool
-) -> pd.DataFrame:
+def _eligible_predictions(predictions: pd.DataFrame, *, require_complete: bool) -> pd.DataFrame:
     required = {"pickup_zone_id", "pickup_count", "prediction"}
     missing = required.difference(predictions.columns)
     if missing:
@@ -58,9 +56,7 @@ def zone_regression_metrics(
     """Return one diagnostic row per zone for a common evaluation interval."""
 
     eligible = _eligible_predictions(predictions, require_complete=require_complete)
-    eligible["absolute_error"] = (
-        eligible["pickup_count"] - eligible["prediction"]
-    ).abs()
+    eligible["absolute_error"] = (eligible["pickup_count"] - eligible["prediction"]).abs()
     eligible["signed_error"] = eligible["prediction"] - eligible["pickup_count"]
     by_zone = (
         eligible.groupby("pickup_zone_id", as_index=False)

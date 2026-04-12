@@ -110,9 +110,7 @@ def run_training_window_experiment(
     for raw_cutoff in cutoffs:
         cutoff = _as_utc(raw_cutoff, "cutoff")
         cutoff_local = cutoff.tz_convert(timezone)
-        evaluation_end = (cutoff_local + pd.DateOffset(days=evaluation_days)).tz_convert(
-            "UTC"
-        )
+        evaluation_end = (cutoff_local + pd.DateOffset(days=evaluation_days)).tz_convert("UTC")
         evaluation = data.loc[
             data["pickup_hour"].ge(cutoff) & data["pickup_hour"].lt(evaluation_end)
         ].copy()
@@ -130,17 +128,11 @@ def run_training_window_experiment(
                 data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(cutoff)
             ].copy()
             if train.empty:
-                raise ValueError(
-                    f"no training rows for cutoff {cutoff} and window {window_days}"
-                )
-            if not expected_evaluation_keys.equals(
-                evaluation[["pickup_hour", "pickup_zone_id"]]
-            ):
+                raise ValueError(f"no training rows for cutoff {cutoff} and window {window_days}")
+            if not expected_evaluation_keys.equals(evaluation[["pickup_hour", "pickup_zone_id"]]):
                 raise RuntimeError("evaluation targets changed between training windows")
 
-            x_train, y_train, x_evaluation = _model_matrices(
-                train, evaluation, feature_columns
-            )
+            x_train, y_train, x_evaluation = _model_matrices(train, evaluation, feature_columns)
             model = lgb.LGBMRegressor(**parameters)
             started = perf_counter()
             model.fit(
@@ -214,19 +206,14 @@ def run_seasonal_gap_experiment(
         target_end_utc = (target_start_local + pd.DateOffset(days=evaluation_days)).tz_convert(
             "UTC"
         )
-        seasonal_start_utc = (
-            target_start_local - pd.DateOffset(years=gap_years)
-        ).tz_convert("UTC")
+        seasonal_start_utc = (target_start_local - pd.DateOffset(years=gap_years)).tz_convert("UTC")
         seasonal_end_utc = (
             seasonal_start_utc.tz_convert(timezone) + pd.DateOffset(days=window_days)
         ).tz_convert("UTC")
-        recent_start_utc = (
-            target_start_local - pd.DateOffset(days=window_days)
-        ).tz_convert("UTC")
+        recent_start_utc = (target_start_local - pd.DateOffset(days=window_days)).tz_convert("UTC")
 
         evaluation = data.loc[
-            data["pickup_hour"].ge(target_start_utc)
-            & data["pickup_hour"].lt(target_end_utc)
+            data["pickup_hour"].ge(target_start_utc) & data["pickup_hour"].lt(target_end_utc)
         ].copy()
         if evaluation.empty:
             raise ValueError(f"no evaluation rows for target start {target_start_utc}")
@@ -240,17 +227,14 @@ def run_seasonal_gap_experiment(
         }
         for strategy, (training_start, training_end) in strategies.items():
             train = data.loc[
-                data["pickup_hour"].ge(training_start)
-                & data["pickup_hour"].lt(training_end)
+                data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(training_end)
             ].copy()
             if train.empty:
                 raise ValueError(
                     f"no training rows for target {target_start_utc} and strategy {strategy}"
                 )
 
-            x_train, y_train, x_evaluation = _model_matrices(
-                train, evaluation, feature_columns
-            )
+            x_train, y_train, x_evaluation = _model_matrices(train, evaluation, feature_columns)
             model = lgb.LGBMRegressor(**parameters)
             started = perf_counter()
             model.fit(x_train, y_train, categorical_feature=["pickup_zone_id"])

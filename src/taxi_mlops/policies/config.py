@@ -92,9 +92,7 @@ def load_policy_validation_plan(path: str | Path) -> dict[str, object]:
     manifest_path = Path(plan["split_manifest"])
     if not manifest_path.is_absolute():
         manifest_path = plan_path.parent.parent / manifest_path
-    _, validation_start, validation_end = split_months(
-        manifest_path, "policy_validation"
-    )
+    _, validation_start, validation_end = split_months(manifest_path, "policy_validation")
     horizon_days = int(evaluation["horizon_calendar_days"])
     if horizon_days <= 0:
         raise ValueError("validation horizon must be positive")
@@ -108,9 +106,9 @@ def load_policy_validation_plan(path: str | Path) -> dict[str, object]:
         if origin.tzinfo is None:
             raise ValueError("validation origins must include UTC offsets")
         origin_utc = origin.tz_convert("UTC")
-        end_utc = (
-            origin_utc.tz_convert(timezone) + pd.DateOffset(days=horizon_days)
-        ).tz_convert("UTC")
+        end_utc = (origin_utc.tz_convert(timezone) + pd.DateOffset(days=horizon_days)).tz_convert(
+            "UTC"
+        )
         if origin_utc < validation_start or end_utc > validation_end:
             raise ValueError("validation origin or horizon falls outside policy_validation")
         parsed_origins.append(origin_utc)

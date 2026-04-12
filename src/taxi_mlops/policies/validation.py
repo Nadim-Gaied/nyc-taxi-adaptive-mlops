@@ -29,14 +29,10 @@ def run_complete_baseline_validation(
     """Evaluate the no-training fallback on the pre-registered target windows."""
 
     ordered = data.copy()
-    ordered["pickup_hour"] = pd.to_datetime(
-        ordered["pickup_hour"], utc=True, errors="raise"
-    )
+    ordered["pickup_hour"] = pd.to_datetime(ordered["pickup_hour"], utc=True, errors="raise")
     ordered = ordered.sort_values(["pickup_hour", "pickup_zone_id"])
     started = perf_counter()
-    all_predictions = complete_daily_weekly_blend_predictions(
-        ordered, timezone=timezone
-    )
+    all_predictions = complete_daily_weekly_blend_predictions(ordered, timezone=timezone)
     inference_seconds_total = perf_counter() - started
     result_rows: list[dict[str, object]] = []
     tier_frames: list[pd.DataFrame] = []
@@ -54,8 +50,7 @@ def run_complete_baseline_validation(
             & all_predictions["pickup_hour"].lt(evaluation_end)
         ].copy()
         canonical = ordered.loc[
-            ordered["pickup_hour"].ge(cutoff)
-            & ordered["pickup_hour"].lt(evaluation_end),
+            ordered["pickup_hour"].ge(cutoff) & ordered["pickup_hour"].lt(evaluation_end),
             ["pickup_hour", "pickup_zone_id", "pickup_count"],
         ]
         validate_common_targets({"reference": canonical, "baseline": predictions})
@@ -76,12 +71,11 @@ def run_complete_baseline_validation(
                 **metrics,
             }
         )
-        tier_reference_start = (
-            cutoff.tz_convert(timezone) - pd.DateOffset(days=365)
-        ).tz_convert("UTC")
+        tier_reference_start = (cutoff.tz_convert(timezone) - pd.DateOffset(days=365)).tz_convert(
+            "UTC"
+        )
         tier_reference = ordered.loc[
-            ordered["pickup_hour"].ge(tier_reference_start)
-            & ordered["pickup_hour"].lt(cutoff)
+            ordered["pickup_hour"].ge(tier_reference_start) & ordered["pickup_hour"].lt(cutoff)
         ]
         tiers = assign_demand_tiers(
             tier_reference,
@@ -92,9 +86,7 @@ def run_complete_baseline_validation(
         tier_metrics["cutoff"] = str(cutoff)
         tier_metrics["training_history"] = "daily_weekly_blend_complete"
         tier_frames.append(tier_metrics)
-        weekly_metrics = _seven_day_metrics(
-            predictions, cutoff=cutoff, timezone=timezone
-        )
+        weekly_metrics = _seven_day_metrics(predictions, cutoff=cutoff, timezone=timezone)
         weekly_metrics["cutoff"] = str(cutoff)
         weekly_metrics["training_history"] = "daily_weekly_blend_complete"
         weekly_frames.append(weekly_metrics)
@@ -130,9 +122,7 @@ def build_alert_scorecard(
     severe_threshold = float(monitor["weekly_wape_severe"])
     persistence_weeks = int(monitor["persistence_weeks"])
 
-    reference = weekly_results.loc[
-        weekly_results["training_history"].eq(reference_history)
-    ].copy()
+    reference = weekly_results.loc[weekly_results["training_history"].eq(reference_history)].copy()
     if reference.empty:
         raise ValueError(f"no weekly results for reference history {reference_history}")
     if reference.duplicated(["cutoff", "week_index"]).any():
@@ -182,9 +172,7 @@ def build_promotion_scorecard(
     required_tiers = {"cutoff", "training_history", "demand_tier", "wape"}
     missing_tiers = required_tiers.difference(tier_results.columns)
     if missing_tiers:
-        raise ValueError(
-            f"tier results are missing columns: {', '.join(sorted(missing_tiers))}"
-        )
+        raise ValueError(f"tier results are missing columns: {', '.join(sorted(missing_tiers))}")
 
     promotion = policy["promotion"]
     if not isinstance(promotion, dict):
@@ -199,9 +187,7 @@ def build_promotion_scorecard(
     if reference.duplicated("cutoff").any():
         raise ValueError("reference results contain duplicate cutoffs")
     reference = reference.set_index("cutoff")
-    trigger_by_cutoff = (
-        alert_scorecard.groupby("cutoff")["candidate_evaluation_trigger"].any()
-    )
+    trigger_by_cutoff = alert_scorecard.groupby("cutoff")["candidate_evaluation_trigger"].any()
 
     reference_tiers = tier_results.loc[
         tier_results["training_history"].eq(reference_history),
@@ -223,12 +209,9 @@ def build_promotion_scorecard(
             validate="1:1",
         )
         tier_comparison["tier_wape_regression"] = (
-            tier_comparison["candidate_tier_wape"]
-            - tier_comparison["reference_tier_wape"]
+            tier_comparison["candidate_tier_wape"] - tier_comparison["reference_tier_wape"]
         )
-        maximum_by_cutoff = tier_comparison.groupby("cutoff")[
-            "tier_wape_regression"
-        ].max()
+        maximum_by_cutoff = tier_comparison.groupby("cutoff")["tier_wape_regression"].max()
 
         for candidate in candidates.itertuples(index=False):
             cutoff = candidate.cutoff
@@ -236,13 +219,10 @@ def build_promotion_scorecard(
                 raise ValueError(f"reference history has no result for cutoff {cutoff}")
             current = reference.loc[cutoff]
             relative_improvement = float(
-                (float(current["wape"]) - float(candidate.wape))
-                / float(current["wape"])
+                (float(current["wape"]) - float(candidate.wape)) / float(current["wape"])
             )
             tier_regression = float(maximum_by_cutoff.loc[cutoff])
-            zone_regression = float(
-                float(candidate.zone_mae_p95) - float(current["zone_mae_p95"])
-            )
+            zone_regression = float(float(candidate.zone_mae_p95) - float(current["zone_mae_p95"]))
             bias_regression = float(
                 abs(float(candidate.mean_bias)) - abs(float(current["mean_bias"]))
             )
@@ -251,9 +231,7 @@ def build_promotion_scorecard(
             tier_pass = tier_regression <= maximum_tier_regression
             zone_pass = zone_regression <= maximum_zone_regression
             bias_pass = (not require_bias_not_worse) or bias_regression <= 0
-            quality_pass = all(
-                (coverage_pass, wape_pass, tier_pass, zone_pass, bias_pass)
-            )
+            quality_pass = all((coverage_pass, wape_pass, tier_pass, zone_pass, bias_pass))
             triggered = bool(trigger_by_cutoff.get(cutoff, False))
             rows.append(
                 {
@@ -273,9 +251,7 @@ def build_promotion_scorecard(
                     "promotion_pressure": triggered and quality_pass,
                 }
             )
-    return pd.DataFrame(rows).sort_values(["cutoff", "candidate_history"]).reset_index(
-        drop=True
-    )
+    return pd.DataFrame(rows).sort_values(["cutoff", "candidate_history"]).reset_index(drop=True)
 
 
 def summarize_policy_validation(
@@ -302,19 +278,13 @@ def summarize_policy_validation(
     return {
         "reference_history": reference_history,
         "origin_count": int(
-            results.loc[
-                results["training_history"].eq(reference_history), "cutoff"
-            ].nunique()
+            results.loc[results["training_history"].eq(reference_history), "cutoff"].nunique()
         ),
         "weekly_observations": int(len(alert_scorecard)),
         "warning_weeks": int(alert_scorecard["warning_breach"].sum()),
         "severe_weeks": int(alert_scorecard["severe_breach"].sum()),
-        "persistent_warning_events": int(
-            alert_scorecard["persistent_warning_event"].sum()
-        ),
-        "candidate_evaluation_events": int(
-            alert_scorecard["candidate_evaluation_trigger"].sum()
-        ),
+        "persistent_warning_events": int(alert_scorecard["persistent_warning_event"].sum()),
+        "candidate_evaluation_events": int(alert_scorecard["candidate_evaluation_trigger"].sum()),
         "triggered_origins": int(
             alert_scorecard.groupby("cutoff")["candidate_evaluation_trigger"].any().sum()
         ),

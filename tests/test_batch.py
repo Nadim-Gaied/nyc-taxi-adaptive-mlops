@@ -71,4 +71,3 @@ def test_process_month_range_fails_before_work_when_month_is_missing(tmp_path) -
             start_month="2019-01",
             end_month="2019-01",
         )
-

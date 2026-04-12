@@ -42,9 +42,7 @@ LINEAR_CATEGORICAL_COLUMNS = [
 def _linear_pipeline(
     feature_columns: Sequence[str], model_name: str, parameters: Mapping[str, object]
 ) -> Pipeline:
-    categorical = [
-        column for column in LINEAR_CATEGORICAL_COLUMNS if column in feature_columns
-    ]
+    categorical = [column for column in LINEAR_CATEGORICAL_COLUMNS if column in feature_columns]
     numeric = [column for column in feature_columns if column not in categorical]
     transformer = ColumnTransformer(
         [
@@ -93,9 +91,7 @@ def _fit_predict(
         x_train = train[feature_columns].copy()
         x_evaluation = evaluation[feature_columns].copy()
         categories = sorted(train["pickup_zone_id"].unique())
-        x_train["pickup_zone_id"] = pd.Categorical(
-            x_train["pickup_zone_id"], categories=categories
-        )
+        x_train["pickup_zone_id"] = pd.Categorical(x_train["pickup_zone_id"], categories=categories)
         x_evaluation["pickup_zone_id"] = pd.Categorical(
             x_evaluation["pickup_zone_id"], categories=categories
         )
@@ -124,9 +120,7 @@ def _fit_predict(
         inference_seconds = perf_counter() - started
         fitted_model = estimator.named_steps["model"]
         iterations = (
-            getattr(fitted_model, "n_iter_", None)
-            if model_name == "poisson_regression"
-            else None
+            getattr(fitted_model, "n_iter_", None) if model_name == "poisson_regression" else None
         )
         configured_limit = int(parameters.get("max_iter", 100))
         diagnostics = {
@@ -221,13 +215,12 @@ def run_model_family_experiment(
                 "lag_168h",
             ]
         ].copy()
-        both_available = complete_baseline["lag_24h"].notna() & complete_baseline[
-            "lag_168h"
-        ].notna()
+        both_available = (
+            complete_baseline["lag_24h"].notna() & complete_baseline["lag_168h"].notna()
+        )
         complete_baseline["prediction"] = np.where(
             both_available,
-            0.5 * complete_baseline["lag_24h"]
-            + 0.5 * complete_baseline["lag_168h"],
+            0.5 * complete_baseline["lag_24h"] + 0.5 * complete_baseline["lag_168h"],
             complete_baseline["lag_168h"]
             .fillna(complete_baseline["lag_24h"])
             .fillna(complete_baseline["lag_1h"]),
@@ -240,22 +233,13 @@ def run_model_family_experiment(
             raise ValueError("cutoffs must include an explicit UTC offset")
         cutoff = cutoff.tz_convert("UTC")
         cutoff_local = cutoff.tz_convert(timezone)
-        evaluation_end = (
-            cutoff_local + pd.DateOffset(days=evaluation_days)
-        ).tz_convert("UTC")
-        training_start = (
-            cutoff_local - pd.DateOffset(days=training_window_days)
-        ).tz_convert("UTC")
-        train = data.loc[
-            data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(cutoff)
-        ]
+        evaluation_end = (cutoff_local + pd.DateOffset(days=evaluation_days)).tz_convert("UTC")
+        training_start = (cutoff_local - pd.DateOffset(days=training_window_days)).tz_convert("UTC")
+        train = data.loc[data["pickup_hour"].ge(training_start) & data["pickup_hour"].lt(cutoff)]
         evaluation = data.loc[
-            data["pickup_hour"].ge(cutoff)
-            & data["pickup_hour"].lt(evaluation_end)
+            data["pickup_hour"].ge(cutoff) & data["pickup_hour"].lt(evaluation_end)
         ]
-        canonical_targets = evaluation[
-            ["pickup_hour", "pickup_zone_id", "pickup_count"]
-        ]
+        canonical_targets = evaluation[["pickup_hour", "pickup_zone_id", "pickup_count"]]
         tiers = assign_demand_tiers(
             train,
             cumulative_boundaries=tier_boundaries,
@@ -307,9 +291,7 @@ def run_model_family_experiment(
                 predictions = canonical_targets.copy()
                 predictions["prediction"] = prediction
 
-            validate_common_targets(
-                {"reference": canonical_targets, model_name: predictions}
-            )
+            validate_common_targets({"reference": canonical_targets, model_name: predictions})
             metrics = regression_metrics(predictions)
             result = {
                 "cutoff": str(cutoff),
