@@ -129,19 +129,25 @@ def test_monitoring_requires_complete_window_and_writes_dashboard(tmp_path) -> N
     partial = reporter.build(as_of=targets[1])
     assert partial.forecast_status == "insufficient_data"
     assert not partial.alert_window_complete
+    assert partial.alert_action == "ignored_incomplete"
 
     prediction.run(targets[1])
     scoring.run(targets[1], as_of=targets[1] + pd.Timedelta(hours=1))
+    state.record_event("cycle", "started", details={"as_of": targets[1].isoformat()})
     complete = reporter.build(as_of=targets[1] + pd.Timedelta(hours=1))
 
     assert complete.forecast_status == "healthy"
     assert complete.operational_status == "healthy"
     assert complete.alert_window_complete
     assert complete.alert_window_wape == 2 / 66
+    assert complete.alert_action == "no_active_alert"
+    assert complete.active_incident_id is None
     assert config.storage.monitoring_root.joinpath("dashboard.html").is_file()
     assert config.storage.monitoring_root.joinpath("figures/zone_wape.png").is_file()
     snapshot = json.loads(config.storage.monitoring_root.joinpath("snapshot.json").read_text())
     assert snapshot["monitoring_policy"]["drift_can_trigger_retraining_alone"] is False
     assert snapshot["counts"]["scored_hours"] == 2
+    assert snapshot["counts"]["active_alerts"] == 0
+    assert snapshot["alert_lifecycle"]["action"] == "no_active_alert"
     tier_metrics = pd.read_csv(config.storage.monitoring_root / "tier_metrics.csv")
     assert set(tier_metrics["demand_tier"]) == {"high", "low"}

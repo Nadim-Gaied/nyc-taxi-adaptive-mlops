@@ -1,0 +1,37 @@
+name: nyc-taxi-adaptive-mlops
+prefect-version: "3.8.7"
+
+deployments:
+  - name: hourly-production
+    tags: [production, hourly, taxi-demand]
+    description: Score the prior hour, check scheduled training, predict the current hour, and monitor.
+    entrypoint: src/taxi_mlops/orchestration/prefect_flows.py:hourly_production_flow
+    parameters:
+      config_path: configs/production.yaml
+      project_root: .
+      allow_missing_previous_prediction: false
+    schedules:
+      - cron: "0 * * * *"
+        timezone: UTC
+        active: true
+    work_pool:
+      name: nyc-taxi-production
+      work_queue_name: default
+      job_variables: {}
+
+  - name: daily-recovery-checkpoint
+    tags: [production, recovery, taxi-demand]
+    description: Verify all production state and write a control-plane checkpoint.
+    entrypoint: src/taxi_mlops/orchestration/prefect_flows.py:daily_recovery_flow
+    parameters:
+      config_path: configs/production.yaml
+      project_root: .
+      checkpoint_root: data/production/checkpoints
+    schedules:
+      - cron: "30 2 * * *"
+        timezone: UTC
+        active: true
+    work_pool:
+      name: nyc-taxi-production
+      work_queue_name: default
+      job_variables: {}

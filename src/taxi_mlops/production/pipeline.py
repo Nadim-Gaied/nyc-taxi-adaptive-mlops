@@ -6,8 +6,10 @@ import hashlib
 import os
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 from taxi_mlops.evaluation import regression_metrics
@@ -44,6 +46,132 @@ def _prediction_path(root: Path, target: pd.Timestamp) -> Path:
     )
 
 
+def _score_path(root: Path, target: pd.Timestamp) -> Path:
+    return (
+        root
+        / target.strftime("%Y")
+        / target.strftime("%m")
+        / target.strftime("%d")
+        / f"scored_{target.strftime('%Y%m%dT%H%M%SZ')}.parquet"
+    )
+
+
+def _single_value(frame: pd.DataFrame, column: str) -> Any:
+    if column not in frame:
+        raise ValueError(f"recovery artifact is missing lineage column: {column}")
+    values = frame[column].drop_duplicates()
+    if len(values) != 1:
+        raise ValueError(f"recovery artifact has ambiguous {column} lineage")
+    return values.iloc[0]
+
+
+def _recover_prediction(
+    path: Path,
+    *,
+    target: pd.Timestamp,
+    state: ProductionStateStore,
+    expected_zones: int | None,
+) -> PredictionBatch:
+    output = pd.read_parquet(path)
+    required = {"pickup_hour", "pickup_zone_id", "prediction"}
+    missing = required.difference(output.columns)
+    if missing:
+        raise ValueError(f"orphan prediction artifact is missing: {sorted(missing)}")
+    output["pickup_hour"] = pd.to_datetime(output["pickup_hour"], utc=True, errors="raise")
+    if not output["pickup_hour"].eq(target).all():
+        raise ValueError("orphan prediction artifact contains the wrong target hour")
+    if output.duplicated(["pickup_hour", "pickup_zone_id"]).any():
+        raise ValueError("orphan prediction artifact contains duplicate keys")
+    if expected_zones is not None and len(output) != expected_zones:
+        raise ValueError("orphan prediction artifact has incomplete zone coverage")
+    values = output["prediction"].to_numpy(dtype=float)
+    if not np.isfinite(values).all() or (values < 0).any():
+        raise ValueError("orphan prediction artifact contains invalid predictions")
+
+    model_name = str(_single_value(output, "model_name"))
+    model_version = str(_single_value(output, "model_version"))
+    fingerprint = str(_single_value(output, "feature_fingerprint"))
+    identity = "|".join([target.isoformat(), model_name, model_version, fingerprint])
+    expected_batch_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    batch_id = str(_single_value(output, "batch_id"))
+    if batch_id != expected_batch_id:
+        raise ValueError("orphan prediction artifact has an invalid batch identity")
+    model_uri = (
+        str(_single_value(output, "model_uri"))
+        if "model_uri" in output
+        else f"models:/{model_name}/{model_version}"
+    )
+    batch = PredictionBatch(
+        batch_id=batch_id,
+        target_hour=target.isoformat(),
+        generated_at=str(_single_value(output, "generated_at")),
+        model_name=model_name,
+        model_version=model_version,
+        model_alias=str(_single_value(output, "model_alias")),
+        model_run_id=str(_single_value(output, "model_run_id")),
+        model_uri=model_uri,
+        feature_fingerprint=fingerprint,
+        prediction_path=str(path.resolve()),
+        prediction_sha256=sha256_file(path),
+        row_count=len(output),
+    )
+    state.record_prediction(batch)
+    state.update_watermark("predict", target.isoformat(), fingerprint)
+    state.record_event(
+        "predict",
+        "recovered",
+        batch_id=batch_id,
+        details={"target_hour": target.isoformat(), "artifact": str(path.resolve())},
+    )
+    return batch
+
+
+def _recover_score(
+    path: Path,
+    *,
+    target: pd.Timestamp,
+    cutoff: pd.Timestamp,
+    batch: PredictionBatch,
+    state: ProductionStateStore,
+) -> ScoreRecord:
+    scored = pd.read_parquet(path)
+    if "batch_id" not in scored or set(scored["batch_id"].astype(str)) != {batch.batch_id}:
+        raise ValueError("orphan score artifact has conflicting batch lineage")
+    scored["pickup_hour"] = pd.to_datetime(scored["pickup_hour"], utc=True, errors="raise")
+    if not scored["pickup_hour"].eq(target).all():
+        raise ValueError("orphan score artifact contains the wrong target hour")
+    if len(scored) != batch.row_count:
+        raise ValueError("orphan score artifact has incomplete observation coverage")
+    metrics = regression_metrics(scored)
+    scored_at = (
+        canonical_utc(_single_value(scored, "scored_at"), "scored_at")
+        if "scored_at" in scored
+        else cutoff
+    )
+    score = ScoreRecord(
+        batch_id=batch.batch_id,
+        scored_at=scored_at.isoformat(),
+        scored_path=str(path.resolve()),
+        observations=int(metrics["observations"]),
+        actual_pickups=float(scored["pickup_count"].sum()),
+        predicted_pickups=float(scored["prediction"].sum()),
+        mae=float(metrics["mae"]),
+        wape=None if metrics["wape"] is None else float(metrics["wape"]),
+        mean_bias=float(metrics["mean_bias"]),
+        prediction_coverage=float(metrics["prediction_coverage"]),
+        score_sha256=sha256_file(path),
+    )
+    state.record_score(score)
+    state.update_watermark("score", target.isoformat(), batch.feature_fingerprint)
+    state.record_event(
+        "score",
+        "recovered",
+        batch_id=batch.batch_id,
+        details={"target_hour": target.isoformat(), "artifact": str(path.resolve())},
+    )
+    return score
+
+
 class HourlyPredictionPipeline:
     def __init__(
         self,
@@ -54,6 +182,7 @@ class HourlyPredictionPipeline:
         model_resolver: MLflowLightGBMResolver,
         timezone: str = "America/New_York",
         expected_zones: int | None = 263,
+        data_source: MonthlyReplayDataSource | None = None,
     ) -> None:
         self.feature_root = Path(feature_root)
         self.output_root = Path(output_root)
@@ -61,6 +190,7 @@ class HourlyPredictionPipeline:
         self.model_resolver = model_resolver
         self.timezone = timezone
         self.expected_zones = expected_zones
+        self.data_source = data_source
 
     def run(self, target_hour: str | pd.Timestamp) -> PredictionBatch:
         started_at = perf_counter()
@@ -74,10 +204,19 @@ class HourlyPredictionPipeline:
                 raise ValueError("persisted prediction artifact checksum has changed")
             return existing
 
+        path = _prediction_path(self.output_root, target).resolve()
+        if path.is_file():
+            return _recover_prediction(
+                path,
+                target=target,
+                state=self.state,
+                expected_zones=self.expected_zones,
+            )
+
         self.state.record_event("predict", "started", details={"target_hour": target_text})
         try:
             model = self.model_resolver.resolve()
-            source = MonthlyReplayDataSource(
+            source = self.data_source or MonthlyReplayDataSource(
                 feature_root=self.feature_root,
                 start=target,
                 end=target + pd.Timedelta(hours=1),
@@ -108,12 +247,8 @@ class HourlyPredictionPipeline:
             output["model_version"] = model.version
             output["model_alias"] = model.alias
             output["model_run_id"] = model.run_id
+            output["model_uri"] = model.source_uri
             output["feature_fingerprint"] = feature_fingerprint
-            path = _prediction_path(self.output_root, target).resolve()
-            if path.exists():
-                raise FileExistsError(
-                    f"untracked prediction artifact already exists for target: {path}"
-                )
             _atomic_parquet(output, path)
             batch = PredictionBatch(
                 batch_id=batch_id,
@@ -165,11 +300,13 @@ class HourlyScoringPipeline:
         output_root: str | Path,
         state_store: ProductionStateStore,
         timezone: str = "America/New_York",
+        data_source: MonthlyReplayDataSource | None = None,
     ) -> None:
         self.feature_root = Path(feature_root)
         self.output_root = Path(output_root)
         self.state = state_store
         self.timezone = timezone
+        self.data_source = data_source
 
     def run(
         self,
@@ -186,16 +323,32 @@ class HourlyScoringPipeline:
             raise ValueError(f"no prediction batch exists for {target_text}")
         existing = self.state.score_for_batch(batch.batch_id)
         if existing is not None:
-            if not Path(existing.scored_path).is_file():
+            existing_path = Path(existing.scored_path)
+            if not existing_path.is_file():
                 raise FileNotFoundError(existing.scored_path)
+            checksum = sha256_file(existing_path)
+            if existing.score_sha256 is None:
+                return self.state.set_score_checksum(batch.batch_id, checksum)
+            if existing.score_sha256 != checksum:
+                raise ValueError("persisted score artifact checksum has changed")
             return existing
         if cutoff < target + pd.Timedelta(hours=1):
             raise ValueError("target label is not complete at the scoring cutoff")
 
+        scored_path = _score_path(self.output_root, target).resolve()
+        if scored_path.is_file():
+            return _recover_score(
+                scored_path,
+                target=target,
+                cutoff=cutoff,
+                batch=batch,
+                state=self.state,
+            )
+
         self.state.record_event("score", "started", batch_id=batch.batch_id)
         try:
             predictions = pd.read_parquet(batch.prediction_path)
-            source = MonthlyReplayDataSource(
+            source = self.data_source or MonthlyReplayDataSource(
                 feature_root=self.feature_root,
                 start=target,
                 end=target + pd.Timedelta(hours=1),
@@ -211,15 +364,7 @@ class HourlyScoringPipeline:
             if scored["pickup_count"].isna().any():
                 raise ValueError("scoring labels do not cover the prediction grid")
             metrics = regression_metrics(scored)
-            scored_path = (
-                self.output_root
-                / target.strftime("%Y")
-                / target.strftime("%m")
-                / target.strftime("%d")
-                / f"scored_{target.strftime('%Y%m%dT%H%M%SZ')}.parquet"
-            ).resolve()
-            if scored_path.exists():
-                raise FileExistsError(f"untracked score artifact already exists: {scored_path}")
+            scored["scored_at"] = cutoff.isoformat()
             _atomic_parquet(scored, scored_path)
             score = ScoreRecord(
                 batch_id=batch.batch_id,
@@ -232,6 +377,7 @@ class HourlyScoringPipeline:
                 wape=None if metrics["wape"] is None else float(metrics["wape"]),
                 mean_bias=float(metrics["mean_bias"]),
                 prediction_coverage=float(metrics["prediction_coverage"]),
+                score_sha256=sha256_file(scored_path),
             )
             self.state.record_score(score)
             self.state.update_watermark("score", target_text, batch.feature_fingerprint)

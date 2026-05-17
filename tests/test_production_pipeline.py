@@ -94,6 +94,63 @@ def test_hourly_prediction_and_scoring_are_idempotent(tmp_path) -> None:
     assert first_score.mae == 0.5
     assert first_score.wape == pytest.approx(1 / 33)
     assert first_score.prediction_coverage == 1.0
+    assert first_score.score_sha256
+
+
+def test_orphan_artifacts_are_reconciled_after_control_plane_crash(tmp_path) -> None:
+    target = pd.Timestamp("2025-01-01T05:00:00Z")
+    feature_root = tmp_path / "features"
+    prediction_root = tmp_path / "predictions"
+    score_root = tmp_path / "scores"
+    _write_feature_month(feature_root, target)
+
+    original_state = ProductionStateStore(tmp_path / "original.db")
+    original_prediction = HourlyPredictionPipeline(
+        feature_root=feature_root,
+        output_root=prediction_root,
+        state_store=original_state,
+        model_resolver=_FakeResolver(),
+        timezone="America/New_York",
+        expected_zones=2,
+    ).run(target)
+
+    recovered_state = ProductionStateStore(tmp_path / "recovered.db")
+    recovered_prediction = HourlyPredictionPipeline(
+        feature_root=feature_root,
+        output_root=prediction_root,
+        state_store=recovered_state,
+        model_resolver=_FakeResolver(),
+        timezone="America/New_York",
+        expected_zones=2,
+    ).run(target)
+    assert recovered_prediction == original_prediction
+    assert recovered_state.event_history()[-1]["status"] == "recovered"
+
+    original_score = HourlyScoringPipeline(
+        feature_root=feature_root,
+        output_root=score_root,
+        state_store=recovered_state,
+        timezone="America/New_York",
+    ).run(target, as_of=target + pd.Timedelta(hours=1))
+
+    second_recovered_state = ProductionStateStore(tmp_path / "second-recovered.db")
+    HourlyPredictionPipeline(
+        feature_root=feature_root,
+        output_root=prediction_root,
+        state_store=second_recovered_state,
+        model_resolver=_FakeResolver(),
+        timezone="America/New_York",
+        expected_zones=2,
+    ).run(target)
+    recovered_score = HourlyScoringPipeline(
+        feature_root=feature_root,
+        output_root=score_root,
+        state_store=second_recovered_state,
+        timezone="America/New_York",
+    ).run(target, as_of=target + pd.Timedelta(hours=2))
+
+    assert recovered_score == original_score
+    assert second_recovered_state.event_history()[-1]["status"] == "recovered"
 
 
 def test_state_rejects_conflicting_lineage_for_existing_target(tmp_path) -> None:

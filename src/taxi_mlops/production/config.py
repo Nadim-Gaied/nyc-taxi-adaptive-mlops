@@ -45,6 +45,8 @@ class MonitoringConfig:
     drift_can_trigger_retraining_alone: bool
     alert_window_hours: int
     zone_lookback_days: int
+    alert_webhook_url_env: str | None
+    alert_webhook_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -127,6 +129,14 @@ def load_production_config(
             ),
             alert_window_hours=int(monitoring.get("alert_window_hours", 168)),
             zone_lookback_days=int(monitoring.get("zone_lookback_days", 28)),
+            alert_webhook_url_env=(
+                str(monitoring["alert_webhook_url_env"])
+                if monitoring.get("alert_webhook_url_env")
+                else None
+            ),
+            alert_webhook_timeout_seconds=float(
+                monitoring.get("alert_webhook_timeout_seconds", 5.0)
+            ),
         ),
     )
     if config.version != 1:
@@ -141,4 +151,6 @@ def load_production_config(
         raise ValueError("monitoring alert window must be positive")
     if config.monitoring.zone_lookback_days < 1:
         raise ValueError("monitoring zone lookback must be positive")
+    if config.monitoring.alert_webhook_timeout_seconds <= 0:
+        raise ValueError("alert webhook timeout must be positive")
     return config

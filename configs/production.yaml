@@ -32,3 +32,6 @@ monitoring:
   drift_can_trigger_retraining_alone: false
   alert_window_hours: 168
   zone_lookback_days: 28
+  # Set this environment variable to an HTTP(S) endpoint to enable notifications.
+  alert_webhook_url_env: TAXI_MLOPS_ALERT_WEBHOOK_URL
+  alert_webhook_timeout_seconds: 5

@@ -20,6 +20,7 @@ from taxi_mlops.evaluation import (
     tier_regression_metrics,
     zone_regression_metrics,
 )
+from taxi_mlops.production.alerts import AlertEvaluation, ForecastAlertManager
 from taxi_mlops.production.config import ProductionConfig
 from taxi_mlops.production.contracts import canonical_utc
 from taxi_mlops.production.state import ProductionStateStore
@@ -35,6 +36,8 @@ class MonitoringReport:
     scored_hours: int
     alert_window_complete: bool
     alert_window_wape: float | None
+    alert_action: str
+    active_incident_id: int | None
     dashboard_path: str
     snapshot_path: str
 
@@ -177,7 +180,11 @@ def _operational_summary(events: list[dict[str, Any]]) -> tuple[str, pd.DataFram
         .sort_values(["stage", "status"])
         .reset_index(drop=True)
     )
-    last_by_stage = frame.sort_values("event_id").groupby("stage").tail(1)
+    orchestration_stages = {"cycle", "backfill"}
+    health_events = frame.loc[~frame["stage"].isin(orchestration_stages)]
+    if health_events.empty:
+        return "no_data", summary[columns]
+    last_by_stage = health_events.sort_values("event_id").groupby("stage").tail(1)
     statuses = set(last_by_stage["status"])
     status = "severe" if "failed" in statuses else "warning" if "started" in statuses else "healthy"
     return status, summary[columns]
@@ -268,10 +275,14 @@ class ProductionMonitoringReporter:
         config: ProductionConfig,
         state_store: ProductionStateStore,
         zone_tiers: pd.DataFrame | None = None,
+        alert_manager: ForecastAlertManager | None = None,
     ) -> None:
         self.config = config
         self.state = state_store
         self.zone_tiers = zone_tiers
+        self.alert_manager = alert_manager or ForecastAlertManager.from_config(
+            config=config, state_store=state_store
+        )
 
     def _resolve_zone_tiers(self) -> pd.DataFrame | None:
         if self.zone_tiers is not None:
@@ -382,6 +393,15 @@ class ProductionMonitoringReporter:
         else:
             forecast_status = "healthy"
 
+        window_end = cutoff if hourly.empty else hourly["target_hour"].max()
+        alert_evaluation: AlertEvaluation = self.alert_manager.evaluate(
+            forecast_status=forecast_status,
+            window_complete=complete,
+            window_wape=None if alert_wape is None else float(alert_wape),
+            observed_at=cutoff.isoformat(),
+            window_end=window_end.isoformat(),
+        )
+
         observations = self._scored_observations(hourly, cutoff=cutoff)
         if observations.empty:
             zones = pd.DataFrame(
@@ -432,7 +452,7 @@ class ProductionMonitoringReporter:
 
         latest_score = None if hourly.empty else hourly.iloc[-1]
         snapshot = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
             "as_of": cutoff.isoformat(),
             "forecast_status": forecast_status,
@@ -446,6 +466,7 @@ class ProductionMonitoringReporter:
                 ),
             },
             "alert_window": {"complete": complete, **alert_metrics},
+            "alert_lifecycle": alert_evaluation.to_dict(),
             "latest_score": None
             if latest_score is None
             else {
@@ -459,6 +480,7 @@ class ProductionMonitoringReporter:
                 "scored_hours": len(hourly),
                 "scored_zones": int(len(zones)),
                 "deployments": len(self.state.deployment_history()),
+                "active_alerts": len(self.state.alert_history(active_only=True)),
             },
             "watermarks": self.state.watermark_history(),
             "artifacts": {
@@ -482,6 +504,11 @@ class ProductionMonitoringReporter:
         escaped_forecast = html.escape(forecast_status)
         escaped_operational = html.escape(operational_status)
         alert_display = "&mdash;" if alert_wape is None else f"{alert_wape:.2%}"
+        incident_display = (
+            "none"
+            if alert_evaluation.incident_id is None
+            else f"#{alert_evaluation.incident_id} ({alert_evaluation.incident_status})"
+        )
         zone_table = _table_html(
             zones.head(20),
             ["pickup_zone_id", "actual_pickups", "mae", "wape", "mean_bias"],
@@ -511,6 +538,7 @@ code{{background:#eee;padding:.1rem .3rem}}
 <span class="{operational_class}">{escaped_operational}</span></div>
 <div class="card"><strong>Scored hours</strong><br>{len(hourly)}</div>
 <div class="card"><strong>Alert-window WAPE</strong><br>{alert_display}</div>
+<div class="card"><strong>Alert incident</strong><br>{html.escape(incident_display)}</div>
 </div>
 <h2>Forecast quality</h2><img alt="Weekly WAPE" src="{_embedded_png(weekly_figure)}">
 {_table_html(weekly.tail(12))}
@@ -534,6 +562,12 @@ with scale-driven MAE.</p>
             scored_hours=len(hourly),
             alert_window_complete=complete,
             alert_window_wape=None if alert_wape is None else float(alert_wape),
+            alert_action=alert_evaluation.action,
+            active_incident_id=(
+                alert_evaluation.incident_id
+                if alert_evaluation.incident_status in {"open", "acknowledged"}
+                else None
+            ),
             dashboard_path=str(dashboard_path.resolve()),
             snapshot_path=str(snapshot_path.resolve()),
         )

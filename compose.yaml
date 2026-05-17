@@ -1,0 +1,104 @@
+name: nyc-taxi-mlops
+
+services:
+  mlflow:
+    build:
+      context: .
+    image: nyc-taxi-adaptive-mlops:local
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - sqlite:////app/data/mlflow/mlflow.db
+      - --default-artifact-root
+      - /app/data/mlflow/artifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - production-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  job:
+    image: nyc-taxi-adaptive-mlops:local
+    profiles: [jobs]
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - production-data:/app/data
+    command: [taxi-mlops, --help]
+
+  bootstrap:
+    image: nyc-taxi-adaptive-mlops:local
+    profiles: [demo]
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - production-data:/app/data
+      - type: bind
+        source: ./data/reports/locked_replay_v1/fixed_periodic_28d/models/fixed_periodic_28d__periodic__recent_365d__20251224T050000Z.txt
+        target: /seed/reference-model.txt
+        read_only: true
+    command:
+      - taxi-mlops
+      - bootstrap-production-reference
+      - --config
+      - configs/production.yaml
+      - --project-root
+      - /app
+      - --model-path
+      - /seed/reference-model.txt
+      - --training-start
+      - "2024-12-24T05:00:00Z"
+      - --training-end
+      - "2025-12-24T05:00:00Z"
+
+  demo:
+    image: nyc-taxi-adaptive-mlops:local
+    profiles: [demo]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    working_dir: /app
+    volumes:
+      - production-data:/app/data
+      - type: bind
+        source: ./data/processed/features_monthly
+        target: /app/data/processed/features_monthly
+        read_only: true
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        taxi-mlops run-production-cycle \
+          --config configs/production.yaml \
+          --project-root /app \
+          --as-of 2025-12-31T05:00:00Z \
+          --allow-missing-previous-prediction
+        taxi-mlops run-production-cycle \
+          --config configs/production.yaml \
+          --project-root /app \
+          --as-of 2025-12-31T06:00:00Z
+        taxi-mlops audit-production-state \
+          --config configs/production.yaml \
+          --project-root /app
+
+volumes:
+  production-data:

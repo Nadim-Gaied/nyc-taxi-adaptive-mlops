@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,production]"
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Verify formatting
+        run: python -m ruff format --check src tests
+      - name: Test
+        run: python -m pytest
+      - name: Import orchestration deployments
+        run: python -c "from taxi_mlops.orchestration.prefect_flows import hourly_production_flow, daily_recovery_flow"
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Compose topology
+        run: docker compose --profile demo config --quiet
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: nyc-taxi-adaptive-mlops:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-test CLI
+        run: docker run --rm nyc-taxi-adaptive-mlops:ci taxi-mlops --help

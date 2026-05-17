@@ -47,13 +47,20 @@ from taxi_mlops.policies import (
     summarize_policy_validation,
 )
 from taxi_mlops.production import (
+    ForecastAlertManager,
     HourlyPredictionPipeline,
     HourlyScoringPipeline,
     MLflowLightGBMResolver,
+    ProductionBackfillRunner,
+    ProductionCycleRunner,
+    ProductionIntegrityAuditor,
     ProductionMonitoringReporter,
     ProductionStateStore,
     ScheduledTrainingPipeline,
+    bootstrap_production_reference,
+    create_control_plane_checkpoint,
     load_production_config,
+    verify_control_plane_checkpoint,
 )
 from taxi_mlops.replay import (
     ModelRegistry,
@@ -958,6 +965,107 @@ def _build_production_monitoring(args: argparse.Namespace) -> None:
     print(json.dumps(reporter.build(as_of=args.as_of).to_dict(), indent=2))
 
 
+def _list_production_alerts(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    incidents = state.alert_history(active_only=args.active_only)
+    payload = []
+    for incident in incidents:
+        item = asdict(incident)
+        if args.include_history:
+            item["transitions"] = [
+                asdict(value) for value in state.alert_transition_history(incident.incident_id)
+            ]
+            item["deliveries"] = state.alert_delivery_history(incident.incident_id)
+        payload.append(item)
+    print(json.dumps({"incidents": payload}, indent=2))
+
+
+def _acknowledge_production_alert(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    manager = ForecastAlertManager.from_config(config=config, state_store=state)
+    acknowledged_at = args.at or pd.Timestamp.now(tz="UTC").isoformat()
+    result = manager.acknowledge(
+        args.incident_id,
+        actor=args.actor,
+        note=args.note,
+        acknowledged_at=acknowledged_at,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _audit_production_state(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    auditor = ProductionIntegrityAuditor(config=config, state_store=state)
+    report = auditor.run(verify_registry=not args.skip_registry)
+    print(json.dumps(report.to_dict(), indent=2))
+    if report.status == "failed":
+        raise SystemExit(1)
+
+
+def _checkpoint_production_state(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    result = create_control_plane_checkpoint(
+        config=config,
+        state_store=state,
+        destination=args.destination,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _run_production_cycle(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    cutoff = args.as_of or pd.Timestamp.now(tz="UTC").floor("h").isoformat()
+    runner = ProductionCycleRunner(config=config, state_store=state)
+    result = runner.run(
+        cutoff,
+        allow_missing_previous_prediction=args.allow_missing_previous_prediction,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _backfill_production(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    runner = ProductionBackfillRunner(config=config, state_store=state)
+    result = runner.run(
+        start=args.start,
+        end=args.end,
+        maximum_hours=args.maximum_hours,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _bootstrap_production_reference(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    state = ProductionStateStore(config.storage.state_db)
+    result = bootstrap_production_reference(
+        config=config,
+        state_store=state,
+        model_path=args.model_path,
+        training_start=args.training_start,
+        training_end=args.training_end,
+        archive_ref=args.archive_ref,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+
+
+def _verify_production_checkpoint(args: argparse.Namespace) -> None:
+    config = load_production_config(args.config, project_root=args.project_root)
+    result = verify_control_plane_checkpoint(
+        config=config,
+        manifest_path=args.manifest,
+        verify_registry=not args.skip_registry,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+    if result.status == "failed":
+        raise SystemExit(1)
+
+
 def _analyze_regimes_split(args: argparse.Namespace) -> None:
     data = load_named_split(
         monthly_root=args.monthly_root,
@@ -1303,6 +1411,89 @@ def _parser() -> argparse.ArgumentParser:
     production_monitoring.add_argument("--project-root", default=".")
     production_monitoring.add_argument("--as-of", required=True)
     production_monitoring.set_defaults(handler=_build_production_monitoring)
+
+    production_alerts = subparsers.add_parser(
+        "list-production-alerts",
+        help="list durable forecast-alert incidents and their audit history",
+    )
+    production_alerts.add_argument("--config", default="configs/production.yaml")
+    production_alerts.add_argument("--project-root", default=".")
+    production_alerts.add_argument("--active-only", action="store_true")
+    production_alerts.add_argument("--include-history", action="store_true")
+    production_alerts.set_defaults(handler=_list_production_alerts)
+
+    production_ack = subparsers.add_parser(
+        "acknowledge-production-alert",
+        help="acknowledge an active forecast-alert incident without changing model state",
+    )
+    production_ack.add_argument("--config", default="configs/production.yaml")
+    production_ack.add_argument("--project-root", default=".")
+    production_ack.add_argument("--incident-id", type=int, required=True)
+    production_ack.add_argument("--actor", required=True)
+    production_ack.add_argument("--note")
+    production_ack.add_argument("--at", help="UTC acknowledgement time; defaults to now")
+    production_ack.set_defaults(handler=_acknowledge_production_alert)
+
+    production_audit = subparsers.add_parser(
+        "audit-production-state",
+        help="verify production metadata, artifacts, metrics, and registry lineage",
+    )
+    production_audit.add_argument("--config", default="configs/production.yaml")
+    production_audit.add_argument("--project-root", default=".")
+    production_audit.add_argument("--skip-registry", action="store_true")
+    production_audit.set_defaults(handler=_audit_production_state)
+
+    production_checkpoint = subparsers.add_parser(
+        "checkpoint-production-state",
+        help="back up SQLite state and hash every referenced production artifact",
+    )
+    production_checkpoint.add_argument("--config", default="configs/production.yaml")
+    production_checkpoint.add_argument("--project-root", default=".")
+    production_checkpoint.add_argument("--destination", required=True)
+    production_checkpoint.set_defaults(handler=_checkpoint_production_state)
+
+    production_cycle = subparsers.add_parser(
+        "run-production-cycle",
+        help="run one scheduler-neutral hourly production control cycle",
+    )
+    production_cycle.add_argument("--config", default="configs/production.yaml")
+    production_cycle.add_argument("--project-root", default=".")
+    production_cycle.add_argument("--as-of")
+    production_cycle.add_argument("--allow-missing-previous-prediction", action="store_true")
+    production_cycle.set_defaults(handler=_run_production_cycle)
+
+    production_backfill = subparsers.add_parser(
+        "backfill-production-hours",
+        help="resumably predict and score a bounded interval within one model epoch",
+    )
+    production_backfill.add_argument("--config", default="configs/production.yaml")
+    production_backfill.add_argument("--project-root", default=".")
+    production_backfill.add_argument("--start", required=True)
+    production_backfill.add_argument("--end", required=True)
+    production_backfill.add_argument("--maximum-hours", type=int, default=744)
+    production_backfill.set_defaults(handler=_backfill_production)
+
+    production_bootstrap = subparsers.add_parser(
+        "bootstrap-production-reference",
+        help="idempotently import a portable native model into production MLflow",
+    )
+    production_bootstrap.add_argument("--config", default="configs/production.yaml")
+    production_bootstrap.add_argument("--project-root", default=".")
+    production_bootstrap.add_argument("--model-path", required=True)
+    production_bootstrap.add_argument("--training-start", required=True)
+    production_bootstrap.add_argument("--training-end", required=True)
+    production_bootstrap.add_argument("--archive-ref", default="experiment-v1.0.0")
+    production_bootstrap.set_defaults(handler=_bootstrap_production_reference)
+
+    checkpoint_verify = subparsers.add_parser(
+        "verify-production-checkpoint",
+        help="open a checkpoint copy and verify its database, artifacts, and registry",
+    )
+    checkpoint_verify.add_argument("--config", default="configs/production.yaml")
+    checkpoint_verify.add_argument("--project-root", default=".")
+    checkpoint_verify.add_argument("--manifest", required=True)
+    checkpoint_verify.add_argument("--skip-registry", action="store_true")
+    checkpoint_verify.set_defaults(handler=_verify_production_checkpoint)
 
     regimes = subparsers.add_parser(
         "analyze-regimes-split",
