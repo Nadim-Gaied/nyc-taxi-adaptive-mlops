@@ -16,6 +16,7 @@ data/processed/*
 data/reports/*
 data/mlflow/
 data/production/
+data/continuous_replay/
 mlruns/
 !data/raw/.gitkeep
 !data/interim/.gitkeep

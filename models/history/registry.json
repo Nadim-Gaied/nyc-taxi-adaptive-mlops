@@ -1,0 +1,60 @@
+{
+    "models":  [
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20250806T040000Z",
+                       "trained_at":  "2025-08-06 04:00:00+00:00",
+                       "training_start":  "2024-08-06 04:00:00+00:00",
+                       "training_end":  "2025-08-06 04:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20250806T040000Z.txt"
+                   },
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20250903T040000Z",
+                       "trained_at":  "2025-09-03 04:00:00+00:00",
+                       "training_start":  "2024-09-03 04:00:00+00:00",
+                       "training_end":  "2025-09-03 04:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20250903T040000Z.txt"
+                   },
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20251001T040000Z",
+                       "trained_at":  "2025-10-01 04:00:00+00:00",
+                       "training_start":  "2024-10-01 04:00:00+00:00",
+                       "training_end":  "2025-10-01 04:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20251001T040000Z.txt"
+                   },
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20251029T040000Z",
+                       "trained_at":  "2025-10-29 04:00:00+00:00",
+                       "training_start":  "2024-10-29 04:00:00+00:00",
+                       "training_end":  "2025-10-29 04:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20251029T040000Z.txt"
+                   },
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20251126T050000Z",
+                       "trained_at":  "2025-11-26 05:00:00+00:00",
+                       "training_start":  "2024-11-26 05:00:00+00:00",
+                       "training_end":  "2025-11-26 05:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20251126T050000Z.txt"
+                   },
+                   {
+                       "model_id":  "fixed_periodic_28d__periodic__recent_365d__20251224T050000Z",
+                       "trained_at":  "2025-12-24 05:00:00+00:00",
+                       "training_start":  "2024-12-24 05:00:00+00:00",
+                       "training_end":  "2025-12-24 05:00:00+00:00",
+                       "history_strategy":  "recent_365d",
+                       "feature_set":  "full_v1",
+                       "artifact_path":  "fixed_periodic_28d__periodic__recent_365d__20251224T050000Z.txt"
+                   }
+               ],
+    "active_model_id":  "fixed_periodic_28d__periodic__recent_365d__20251224T050000Z",
+    "version":  1
+}

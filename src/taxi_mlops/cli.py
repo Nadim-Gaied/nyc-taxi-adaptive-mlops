@@ -965,6 +965,43 @@ def _build_production_monitoring(args: argparse.Namespace) -> None:
     print(json.dumps(reporter.build(as_of=args.as_of).to_dict(), indent=2))
 
 
+def _serve_dashboard(args: argparse.Namespace) -> None:
+    from taxi_mlops.dashboard import serve_dashboard
+
+    root = Path(args.project_root).resolve()
+    config = load_production_config(root / args.config, project_root=root)
+    replay_config = None
+    if args.replay_config:
+        candidate = load_production_config(root / args.replay_config, project_root=root)
+        if candidate.storage.state_db.is_file():
+            replay_config = candidate
+    serve_dashboard(
+        config,
+        html_path=root / "docs" / "dashboard.html",
+        replay_config=replay_config,
+        host=args.host,
+        port=args.port,
+    )
+
+
+def _build_dashboard_index(args: argparse.Namespace) -> None:
+    from taxi_mlops.production.dashboard_index import build_zone_history_index
+
+    root = Path(args.project_root).resolve()
+    config = load_production_config(root / args.config, project_root=root)
+    print(json.dumps(build_zone_history_index(config), indent=2))
+
+
+def _run_continuous_replay(args: argparse.Namespace) -> None:
+    from taxi_mlops.production.continuous_replay import ContinuousReplay
+
+    root = Path(args.project_root).resolve()
+    config = load_production_config(root / args.config, project_root=root)
+    replay = ContinuousReplay(config, start=args.start, end=args.end)
+    for step in replay.run(interval_seconds=args.interval_seconds, max_ticks=args.max_ticks):
+        print(json.dumps(asdict(step)), flush=True)
+
+
 def _list_production_alerts(args: argparse.Namespace) -> None:
     config = load_production_config(args.config, project_root=args.project_root)
     state = ProductionStateStore(config.storage.state_db)
@@ -1038,6 +1075,45 @@ def _backfill_production(args: argparse.Namespace) -> None:
         maximum_hours=args.maximum_hours,
     )
     print(json.dumps(result.to_dict(), indent=2))
+
+
+def _extend_dashboard_history(args: argparse.Namespace) -> None:
+    from taxi_mlops.production.history_extension import (
+        extend_historical_scores,
+        plan_historical_epochs,
+    )
+
+    root = Path(args.project_root).resolve()
+    registry = root / args.registry
+    epochs = plan_historical_epochs(registry, start=args.start, end=args.end)
+    if args.plan_only:
+        print(
+            json.dumps(
+                [
+                    {
+                        "start": epoch.start.isoformat(),
+                        "end": epoch.end.isoformat(),
+                        "model_id": epoch.model_id,
+                        "model_path": str(epoch.model_path),
+                        "model_exists": epoch.model_path.is_file(),
+                    }
+                    for epoch in epochs
+                ],
+                indent=2,
+            )
+        )
+        return
+    config = load_production_config(root / args.config, project_root=root)
+    state = ProductionStateStore(config.storage.state_db)
+    results = extend_historical_scores(
+        config=config,
+        state=state,
+        registry_path=registry,
+        start=args.start,
+        end=args.end,
+        maximum_hours=args.maximum_hours,
+    )
+    print(json.dumps(results, indent=2))
 
 
 def _bootstrap_production_reference(args: argparse.Namespace) -> None:
@@ -1412,6 +1488,37 @@ def _parser() -> argparse.ArgumentParser:
     production_monitoring.add_argument("--as-of", required=True)
     production_monitoring.set_defaults(handler=_build_production_monitoring)
 
+    dashboard = subparsers.add_parser(
+        "serve-dashboard",
+        help="serve the taxi-zone dashboard from registered production replay artifacts",
+    )
+    dashboard.add_argument("--config", default="configs/production.yaml")
+    dashboard.add_argument("--replay-config", default="configs/continuous_replay.yaml")
+    dashboard.add_argument("--project-root", default=".")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8765)
+    dashboard.set_defaults(handler=_serve_dashboard)
+
+    dashboard_index = subparsers.add_parser(
+        "build-dashboard-index",
+        help="materialize fast per-zone history from registered scored artifacts",
+    )
+    dashboard_index.add_argument("--config", default="configs/production.yaml")
+    dashboard_index.add_argument("--project-root", default=".")
+    dashboard_index.set_defaults(handler=_build_dashboard_index)
+
+    continuous = subparsers.add_parser(
+        "run-continuous-replay",
+        help="advance isolated historical replay and release each hour's labels after prediction",
+    )
+    continuous.add_argument("--config", default="configs/continuous_replay.yaml")
+    continuous.add_argument("--project-root", default=".")
+    continuous.add_argument("--start", required=True, help="first virtual UTC hour")
+    continuous.add_argument("--end", required=True, help="exclusive virtual UTC end")
+    continuous.add_argument("--interval-seconds", type=float, default=5)
+    continuous.add_argument("--max-ticks", type=int)
+    continuous.set_defaults(handler=_run_continuous_replay)
+
     production_alerts = subparsers.add_parser(
         "list-production-alerts",
         help="list durable forecast-alert incidents and their audit history",
@@ -1472,6 +1579,19 @@ def _parser() -> argparse.ArgumentParser:
     production_backfill.add_argument("--end", required=True)
     production_backfill.add_argument("--maximum-hours", type=int, default=744)
     production_backfill.set_defaults(handler=_backfill_production)
+
+    historical = subparsers.add_parser(
+        "extend-dashboard-history",
+        help="score historical hours with the model available at each hour",
+    )
+    historical.add_argument("--config", default="configs/production.yaml")
+    historical.add_argument("--project-root", default=".")
+    historical.add_argument("--registry", default="models/history/registry.json")
+    historical.add_argument("--start", required=True)
+    historical.add_argument("--end", required=True)
+    historical.add_argument("--maximum-hours", type=int, default=744)
+    historical.add_argument("--plan-only", action="store_true")
+    historical.set_defaults(handler=_extend_dashboard_history)
 
     production_bootstrap = subparsers.add_parser(
         "bootstrap-production-reference",
