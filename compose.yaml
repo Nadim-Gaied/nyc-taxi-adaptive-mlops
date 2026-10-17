@@ -53,7 +53,7 @@ services:
     volumes:
       - production-data:/app/data
       - type: bind
-        source: ./data/reports/locked_replay_v1/fixed_periodic_28d/models/fixed_periodic_28d__periodic__recent_365d__20251224T050000Z.txt
+        source: ./models/history/fixed_periodic_28d__periodic__recent_365d__20251224T050000Z.txt
         target: /seed/reference-model.txt
         read_only: true
     command:

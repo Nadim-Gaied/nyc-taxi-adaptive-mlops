@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from taxi_mlops.dashboard import _decisions
 from taxi_mlops.production.config import load_production_config
 from taxi_mlops.production.continuous_replay import ContinuousReplay
 from taxi_mlops.production.models import ResolvedModel
@@ -64,25 +63,3 @@ def test_continuous_replay_delays_labels_and_resumes(tmp_path: Path) -> None:
     assert resumed[-1].scored_hour == first[1].forecast_hour
     assert len(replay.state.prediction_history()) == 3
     assert len(replay.state.score_history()) == 2
-
-
-def test_decisions_require_fresh_labels_and_recent_accuracy() -> None:
-    start = pd.Timestamp("2026-01-01T00:00:00Z")
-    scored = [
-        {"utc": hour.isoformat(), "a": [10], "p": [10]}
-        for hour in pd.date_range(start, periods=96, freq="h")
-    ]
-    next_hour = (start + pd.Timedelta(hours=96)).isoformat()
-    pending = {"utc": next_hour, "a": None, "p": [100]}
-    ready = _decisions([*scored, pending], "America/New_York")
-    assert ready["items"][0]["status"] == "review_positioning"
-
-    stale = _decisions(
-        [*scored, {**pending, "utc": (start + pd.Timedelta(hours=97)).isoformat()}],
-        "America/New_York",
-    )
-    assert stale["status"] == "stale_replay_labels"
-
-    inaccurate = [*scored[:-24], *[{**row, "p": [40]} for row in scored[-24:]]]
-    withheld = _decisions([*inaccurate, pending], "America/New_York")
-    assert withheld["items"][0]["status"] == "withheld_low_confidence"

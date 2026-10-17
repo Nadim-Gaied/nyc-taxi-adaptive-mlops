@@ -21,7 +21,7 @@ if ($Down) {
 
 $required = @(
     (
-        'data/reports/locked_replay_v1/fixed_periodic_28d/models/' +
+        'models/history/' +
             'fixed_periodic_28d__periodic__recent_365d__20251224T050000Z.txt'
     ),
     'data/processed/features_monthly/2025/features_2025-12.parquet'

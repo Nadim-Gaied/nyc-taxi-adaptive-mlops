@@ -1,4 +1,4 @@
-"""Command-line interface for the initial vertical slice."""
+"""Command-line entry points for research and local operations."""
 
 from __future__ import annotations
 
@@ -77,6 +77,11 @@ from taxi_mlops.tracking import import_locked_replay_to_mlflow
 def _write_json(path: Path, value: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf-8")
+
+
+def _resolve_plan_path(plan_path: Path, value: object) -> Path:
+    path = Path(str(value))
+    return path if path.is_absolute() else plan_path.resolve().parent.parent / path
 
 
 def _build_dataset(args: argparse.Namespace) -> None:
@@ -660,14 +665,11 @@ def _training_history_experiment_split(args: argparse.Namespace) -> None:
 def _policy_validation_split(args: argparse.Namespace) -> None:
     plan_path = Path(args.validation_config)
     plan = load_policy_validation_plan(plan_path)
-    project_root = plan_path.resolve().parent.parent
 
-    def resolve_plan_path(value: object) -> Path:
-        path = Path(str(value))
-        return path if path.is_absolute() else project_root / path
-
-    policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
-    with resolve_plan_path(plan["development_experiment"]).open(encoding="utf-8") as handle:
+    policy = load_lifecycle_policy(_resolve_plan_path(plan_path, plan["lifecycle_policy"]))
+    with _resolve_plan_path(plan_path, plan["development_experiment"]).open(
+        encoding="utf-8"
+    ) as handle:
         development_config = yaml.safe_load(handle)
 
     evaluation_config = plan["evaluation"]
@@ -686,7 +688,7 @@ def _policy_validation_split(args: argparse.Namespace) -> None:
     candidate_histories = [str(value) for value in model_config["candidate_histories"]]
     strategies = [reference_history, *candidate_histories]
 
-    split_manifest = resolve_plan_path(plan["split_manifest"])
+    split_manifest = _resolve_plan_path(plan_path, plan["split_manifest"])
     data_frames = [
         load_named_split(
             monthly_root=args.monthly_root,
@@ -789,13 +791,10 @@ def _build_replay_feature_store(args: argparse.Namespace) -> None:
 def _seed_replay_registry(args: argparse.Namespace) -> None:
     plan_path = Path(args.replay_config)
     plan = load_locked_replay_plan(plan_path)
-    project_root = plan_path.resolve().parent.parent
 
-    def resolve_plan_path(value: object) -> Path:
-        path = Path(str(value))
-        return path if path.is_absolute() else project_root / path
-
-    with resolve_plan_path("configs/development_experiments.yaml").open(encoding="utf-8") as handle:
+    with _resolve_plan_path(plan_path, "configs/development_experiments.yaml").open(
+        encoding="utf-8"
+    ) as handle:
         development_config = yaml.safe_load(handle)
     feature_set = development_config["reference"]["feature_set"]
     feature_groups = development_config["feature_groups"]
@@ -803,7 +802,7 @@ def _seed_replay_registry(args: argparse.Namespace) -> None:
     feature_columns = [
         column for group_name in selected_groups for column in feature_groups[group_name]
     ]
-    split_manifest = resolve_plan_path(plan["split_manifest"])
+    split_manifest = _resolve_plan_path(plan_path, plan["split_manifest"])
     _, history_start, _ = split_months(split_manifest, "development")
     _, replay_start, _ = split_months(split_manifest, "locked_replay")
     source = MonthlyReplayDataSource(
@@ -845,14 +844,11 @@ def _seed_replay_registry(args: argparse.Namespace) -> None:
 def _run_locked_replay(args: argparse.Namespace) -> None:
     plan_path = Path(args.replay_config)
     plan = load_locked_replay_plan(plan_path)
-    project_root = plan_path.resolve().parent.parent
 
-    def resolve_plan_path(value: object) -> Path:
-        path = Path(str(value))
-        return path if path.is_absolute() else project_root / path
-
-    policy = load_lifecycle_policy(resolve_plan_path(plan["lifecycle_policy"]))
-    with resolve_plan_path("configs/development_experiments.yaml").open(encoding="utf-8") as handle:
+    policy = load_lifecycle_policy(_resolve_plan_path(plan_path, plan["lifecycle_policy"]))
+    with _resolve_plan_path(plan_path, "configs/development_experiments.yaml").open(
+        encoding="utf-8"
+    ) as handle:
         development_config = yaml.safe_load(handle)
     feature_set = development_config["reference"]["feature_set"]
     feature_groups = development_config["feature_groups"]
@@ -860,7 +856,9 @@ def _run_locked_replay(args: argparse.Namespace) -> None:
     feature_columns = [
         column for group_name in selected_groups for column in feature_groups[group_name]
     ]
-    _, history_start, _ = split_months(resolve_plan_path(plan["split_manifest"]), "development")
+    _, history_start, _ = split_months(
+        _resolve_plan_path(plan_path, plan["split_manifest"]), "development"
+    )
     comparison = run_locked_replay(
         feature_root=args.feature_root,
         output_dir=args.output_dir,

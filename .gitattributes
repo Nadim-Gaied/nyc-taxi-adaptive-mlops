@@ -1,0 +1,4 @@
+# Native LightGBM snapshots are checksum-identified artifacts.
+models/history/*.txt -text
+models/history/*.json text eol=lf
+models/history/registry.json text eol=lf

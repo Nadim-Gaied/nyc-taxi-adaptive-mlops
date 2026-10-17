@@ -92,52 +92,6 @@ def _display_hour(target_hour: str, timezone_name: str) -> str:
     return f"{local:%b} {local.day}, {local.year} at {local:%H:%M %Z}"
 
 
-def _decisions(hours: list[dict[str, object]], timezone_name: str) -> dict[str, object]:
-    pending = hours[-1] if hours[-1]["a"] is None else None
-    if pending is None:
-        return {"status": "no_pending_forecast", "items": []}
-    scored = hours[:-1]
-    if not scored or _hour(pending["utc"]) - _hour(scored[-1]["utc"]) != timedelta(hours=1):
-        return {"status": "stale_replay_labels", "items": []}
-    target_clock = _hour(pending["utc"]).astimezone(ZoneInfo(timezone_name)).hour
-    peers = [
-        hour
-        for hour in scored
-        if _hour(hour["utc"]).astimezone(ZoneInfo(timezone_name)).hour == target_clock
-    ]
-    if len(peers) < 3 or len(scored) < 24:
-        return {"status": "insufficient_history", "items": []}
-    items = []
-    for pos, forecast in enumerate(pending["p"]):
-        baseline = median(hour["a"][pos] for hour in peers)
-        if forecast < 2 * max(10, baseline) or forecast - baseline < 40:
-            continue
-        recent = scored[-24:]
-        actual = sum(hour["a"][pos] for hour in recent)
-        error = sum(abs(hour["a"][pos] - hour["p"][pos]) for hour in recent)
-        wape = 100 * error / actual if actual else None
-        reliable = actual >= 150 and wape is not None and wape < 40
-        items.append(
-            {
-                "zone_id": pos + 1,
-                "forecast": round(forecast, 1),
-                "same_hour_baseline": round(baseline, 1),
-                "uplift": round(forecast - baseline, 1),
-                "ratio": round(forecast / max(10, baseline), 2),
-                "recent_wape": round(wape, 1) if wape is not None else None,
-                "status": "review_positioning" if reliable else "withheld_low_confidence",
-                "reason": "forecast surge" if reliable else "low volume or high recent error",
-            }
-        )
-    items.sort(key=lambda item: item["uplift"], reverse=True)
-    return {
-        "status": "ready" if items else "no_unusual_forecast_surge",
-        "virtual_clock": pending["utc"],
-        "source": "historical replay; labels released after each simulated hour",
-        "items": items[:8],
-    }
-
-
 def _zone_history(
     config: ProductionConfig, *, zone_id: int, duration: str, end: str
 ) -> dict[str, object]:
@@ -334,7 +288,6 @@ class ReplayFeed:
                 "next_forecast_hour": pending["target_hour"] if pending is not None else None,
                 "model_version": (pending or scored[-1])["model_version"],
                 "hours": hours,
-                "decisions": _decisions(hours, self.config.timezone),
             }
             return self._cached
 
@@ -356,6 +309,10 @@ def serve_dashboard(
     if replay_config is not None:
         feeds["replay"] = ReplayFeed(replay_config)
     html_file = Path(html_path)
+    static_assets = {
+        "/dashboard.css": (html_file.with_suffix(".css"), "text/css; charset=utf-8"),
+        "/dashboard.js": (html_file.with_suffix(".js"), "text/javascript; charset=utf-8"),
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -370,6 +327,9 @@ def serve_dashboard(
                 if route in {"/", "/dashboard"}:
                     content = html_file.read_bytes()
                     mime = "text/html; charset=utf-8"
+                elif route in static_assets:
+                    asset_file, mime = static_assets[route]
+                    content = asset_file.read_bytes()
                 elif route == "/api/feeds":
                     content = json.dumps({"feeds": list(feeds)}).encode("utf-8")
                     mime = "application/json; charset=utf-8"

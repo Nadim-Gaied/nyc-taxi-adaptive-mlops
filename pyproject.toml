@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nyc-taxi-adaptive-mlops"
 version = "0.1.0"
-description = "Historical-production replay for adaptive NYC taxi demand forecasting"
+description = "NYC taxi demand forecasting and model maintenance in historical replay"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
